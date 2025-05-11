@@ -2,7 +2,7 @@
 
 #include <QtWidgets/QMainWindow>
 #include<QDebug>
-#include "build/ui_Chat__Application.h"
+#include "../build/ui_Chat__Application.h"
 
 class Chat__Application : public QMainWindow
 {

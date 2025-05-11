@@ -1,0 +1,4 @@
+CONTACT:loki
+CONTACT:hossam
+ROOM:41a63eaa21fb901ddaa39e0e963a6d7a|loki_roka@gmail.com
+ROOM:b0c0285b80ad5ef5bf0a8dba31c6dedf|hossam_roka@gmail.com

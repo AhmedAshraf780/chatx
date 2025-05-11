@@ -1,4 +1,4 @@
-#include "signup.h"
+#include "../headers/signup.h"
 
 signup::signup(QWidget* parent)
     : QMainWindow(parent)

@@ -3,9 +3,31 @@
 
 #include <QWidget>
 #include <QVector>
-#include <QMap>
+#include <QPair>
 #include <QDateTime>
 #include <qboxlayout.h>
+#include <QListWidget>
+#include <QLineEdit>
+#include <QLabel>
+#include <QScrollArea>
+#include <QVBoxLayout>
+#include <QMenu>
+#include <QAction>
+#include <QInputDialog>
+#include <QColor>
+#include <QScrollBar>
+#include <QStackedWidget>
+#include <QPushButton>
+#include <QHBoxLayout>
+#include <QSizePolicy>
+#include <QEvent>
+#include <QMouseEvent>
+#include <QPalette>
+#include <QPixmap>
+#include <QTextEdit>
+#include <QListWidgetItem>
+#include <QDebug>
+#include "../server/server.h"
 
 class QVBoxLayout;
 class QHBoxLayout;
@@ -20,9 +42,11 @@ class QEvent;
 // Forward declaration of UserInfo
 struct UserInfo {
     QString name;
+    QString email;  // Add this field if not present
     QString status;
     QString lastMessage;
     QString lastSeen;
+    bool isContact;  // Flag to indicate if this is a contact
 };
 
 // Message Structure
@@ -37,11 +61,8 @@ class ChatPage : public QWidget {
 
 public:
     explicit ChatPage(QWidget *parent = nullptr);
-
-private slots:
-    void filterUsers();
-    void handleUserSelected(int row);
-    void sendMessage();
+    ~ChatPage();
+    void loadUsersFromDatabase();  // Moved to public section
 
 private:
     // UI Elements
@@ -53,26 +74,29 @@ private:
     QLabel *chatHeader;
     QStackedWidget *contentStack;
     QVector<QPushButton*> navButtons;
-    
+    QListWidgetItem* createUserListItem(const UserInfo &user, int index);
+
     // Data
     QVector<UserInfo> userList;
-    QMap<int, QVector<MessageInfo>> userMessages;
+    QVector<QVector<MessageInfo>> userMessages;
     int currentUserId;
+    bool isSearching;  // Flag to indicate if we're in search mode
 
     // Setup methods
     void createNavigationPanel(QHBoxLayout *mainLayout);
     void createUsersPanel(QHBoxLayout *mainLayout);
     void createChatArea(QHBoxLayout *mainLayout);
-    void setupDummyData();
-    
-    // Helper methods
     void updateUsersList();
+    void filterUsers();
+    void handleUserSelected(int row);
     void updateChatArea(int userId);
+    void sendMessage();
     void addMessageToUI(const QString &text, bool isFromMe, const QDateTime &timestamp);
-    void showMessageOptions(QWidget *bubble);
-    
-    // Event handling
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void showMessageOptions(QWidget *bubble);
+    void addToContacts(int userId);  // New method to add a user to contacts
+    void loadMessagesForCurrentUser();
+
 };
 
 #endif // CHATPAGE_H

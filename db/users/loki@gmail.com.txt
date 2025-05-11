@@ -1,0 +1,8 @@
+CONTACT:ashraf
+CONTACT:amed
+CONTACT:hossam
+CONTACT:roka
+ROOM:18130cc97f9c01a849dc8175256a01a6|amed_loki@gmail.com
+ROOM:922cd4920d9fee5b41479554acf31d14|loki@gmail.com_roka
+ROOM:9c3ec3ea46eb93b3490e6c6fe949c6b7|ashraf_loki@gmail.com
+ROOM:d3803c7236111972ca90d984f4d19347|hossam_loki@gmail.com
