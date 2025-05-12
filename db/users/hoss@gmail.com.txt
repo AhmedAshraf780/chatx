@@ -1,2 +1,8 @@
-CONTACT:loki
-ROOM:990978016d85cb4d252501b616c47c94|hoss@gmail.com_loki
+CONTACT:roka
+CONTACT:amed@gmail.com
+CONTACT:loki@gmail.com
+CONTACT:ashraf@gmail.com
+ROOM:amed@gmail.com_hoss@gmail.com|amed@gmail.com_hoss@gmail.com
+ROOM:ashraf@gmail.com_hoss@gmail.com|ashraf@gmail.com_hoss@gmail.com
+ROOM:hoss@gmail.com_loki@gmail.com|hoss@gmail.com_loki@gmail.com
+ROOM:hoss@gmail.com_roka@gmail.com|hoss@gmail.com_roka@gmail.com

@@ -11,7 +11,10 @@
 // Initialize static member
 server *server::instance = nullptr;
 
-server::server() : currentClient(nullptr) { loadUsersAccounts(); }
+server::server() : currentClient(nullptr) {
+    loadUsersAccounts();
+    migrateRoomFiles(); // Migrate any inconsistent room files
+}
 
 server *server::getInstance() {
     // Create the instance if it doesn't exist
@@ -205,9 +208,11 @@ Client *server::loginUser(const QString &email, const QString &password) {
 
     // Create new client if doesn't exist
     if (!clients.contains(email)) {
+        // IMPORTANT: Always use email as the userId to ensure consistency
         Client *newClient = new Client(email, userMap[email].username, email);
         clients[email] = newClient;
         loadClientData(newClient);
+        qDebug() << "Created new client with userId/email:" << email << "and username:" << userMap[email].username;
     }
 
     currentClient = clients[email];
@@ -230,6 +235,8 @@ void server::loadClientData(Client *client) {
     // Load user's data file
     QString filename = "../db/users/" + client->getUserId() + ".txt";
     QFile file(filename);
+    qDebug() << "Server: Loading client data from:" << filename;
+
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
 
@@ -239,11 +246,13 @@ void server::loadClientData(Client *client) {
             if (line.startsWith("CONTACT:")) {
                 QString contactId = line.mid(8);
                 client->addContact(contactId);
+                qDebug() << "Server: Added contact:" << contactId;
             } else if (line.startsWith("ROOM:")) {
                 QStringList parts = line.mid(5).split('|');
                 if (parts.size() >= 2) {
                     QString roomId = parts[0];
                     QString roomName = parts[1];
+                    qDebug() << "Server: Loading room:" << roomId << roomName;
 
                     // Create room if it doesn't exist
                     Room *room = client->getRoom(roomId);
@@ -252,47 +261,32 @@ void server::loadClientData(Client *client) {
                         QStringList userIds = roomName.split("_");
                         QString otherUserId = userIds[0] == client->getUserId() ? userIds[1] : userIds[0];
                         room = client->createRoom(otherUserId);
+                        qDebug() << "Server: Created room with" << otherUserId << "ID:" << room->getRoomId();
+                        
+                        // Make sure we're using the right room ID
+                        if (room->getRoomId() != roomId) {
+                            qDebug() << "Server: Warning - Room ID mismatch! File:" << roomId << "Generated:" << room->getRoomId();
+                            // We should create a migration function to handle this
+                        }
                     }
                 }
             }
         }
+        file.close();
     }
 
     // Load all rooms with messages
     QVector<Room *> rooms = client->getAllRooms();
     for (Room *room : rooms) {
-        // Use a map to track unique messages
-        QMap<QString, Message> uniqueMessages;
-        
-        // Load room messages
-        QString roomFile = "../db/rooms/" + room->getRoomId() + ".txt";
-        QFile roomDataFile(roomFile);
-        if (roomDataFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream roomIn(&roomDataFile);
-            while (!roomIn.atEnd()) {
-                QString msgLine = roomIn.readLine().trimmed();
-                if (!msgLine.isEmpty()) {
-                    Message msg = Message::fromString(msgLine);
-                    // Use timestamp and sender as unique key
-                    QString key = msg.getTimestamp().toString(Qt::ISODate) + "_" + msg.getSender();
-                    uniqueMessages[key] = msg;
-                }
-            }
-            roomDataFile.close();
-        }
-        
-        // Clear existing messages to prevent duplicates
-        room->clearMessages();
-        
-        // Add unique messages to room
-        for (const Message &msg : uniqueMessages.values()) {
-            room->addMessage(msg);
-        }
+        qDebug() << "Server: Loading messages for room:" << room->getRoomId();
+        room->loadMessages();
     }
 
     // Also check for rooms where this user is a participant but not in their contacts
     QDir roomsDir("../db/rooms");
     QStringList roomFiles = roomsDir.entryList(QDir::Files);
+    qDebug() << "Server: Checking" << roomFiles.size() << "room files for participation";
+    
     for (const QString &roomFile : roomFiles) {
         QString roomId = roomFile;
         if (roomId.endsWith(".txt")) {
@@ -304,6 +298,29 @@ void server::loadClientData(Client *client) {
             continue;
         }
         
+        // Check if this roomId contains the user's ID (for direct name format)
+        QStringList parts = roomId.split("_");
+        if (parts.contains(client->getUserId())) {
+            // This is a room involving this user
+            QString otherUserId;
+            for (const QString &part : parts) {
+                if (part != client->getUserId()) {
+                    otherUserId = part;
+                    break;
+                }
+            }
+            
+            if (!otherUserId.isEmpty()) {
+                qDebug() << "Server: Found room with user:" << otherUserId << "ID:" << roomId;
+                // Create the room
+                Room *room = client->createRoom(otherUserId);
+                // Load messages
+                room->loadMessages();
+            }
+            continue;
+        }
+        
+        // If room name is not in the direct format, we need to check message content
         QFile file(roomsDir.filePath(roomFile));
         if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QTextStream in(&file);
@@ -333,29 +350,15 @@ void server::loadClientData(Client *client) {
             }
 
             if (hasMessages && !otherUserId.isEmpty()) {
+                qDebug() << "Server: Found messages for user in room:" << roomId;
                 // Create room if it doesn't exist
                 Room *room = client->getRoomWithUser(otherUserId);
                 if (!room) {
                     room = client->createRoom(otherUserId);
                 }
-
+                
                 // Load all messages
-                QMap<QString, Message> uniqueMessages;
-                file.seek(0); // Go back to start of file
-                
-                while (!in.atEnd()) {
-                    QString msgLine = in.readLine().trimmed();
-                    if (!msgLine.isEmpty()) {
-                        Message msg = Message::fromString(msgLine);
-                        QString key = msg.getTimestamp().toString(Qt::ISODate) + "_" + msg.getSender();
-                        uniqueMessages[key] = msg;
-                    }
-                }
-                
-                // Add unique messages to room
-                for (const Message &msg : uniqueMessages.values()) {
-                    room->addMessage(msg);
-                }
+                room->loadMessages();
             }
             file.close();
         }
@@ -371,6 +374,8 @@ void server::saveClientData(Client *client) {
     // Save user's data file
     QString filename = "../db/users/" + client->getUserId() + ".txt";
     QFile file(filename);
+    qDebug() << "Server: Saving client data to:" << filename;
+    
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
 
@@ -378,50 +383,22 @@ void server::saveClientData(Client *client) {
         QVector<QString> contacts = client->getContacts();
         for (const QString &contactId : contacts) {
             out << "CONTACT:" << contactId << "\n";
+            qDebug() << "Server: Saved contact:" << contactId;
         }
 
         // Save rooms
         QVector<Room *> rooms = client->getAllRooms();
         for (Room *room : rooms) {
             out << "ROOM:" << room->getRoomId() << "|" << room->getName() << "\n";
-
-            // Save room messages to a single file
-            // We'll save a temporary map of messages by timestamp to avoid duplicates
-            QMap<QString, Message> uniqueMessages;
+            qDebug() << "Server: Saved room:" << room->getRoomId() << room->getName();
             
-            // First load existing messages to avoid duplicates
-            QString roomFile = "../db/rooms/" + room->getRoomId() + ".txt";
-            QFile roomDataFile(roomFile);
-            if (roomDataFile.exists() && roomDataFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QTextStream roomIn(&roomDataFile);
-                while (!roomIn.atEnd()) {
-                    QString msgLine = roomIn.readLine().trimmed();
-                    if (!msgLine.isEmpty()) {
-                        Message msg = Message::fromString(msgLine);
-                        // Use timestamp and sender as a unique key
-                        QString key = msg.getTimestamp().toString(Qt::ISODate) + "_" + msg.getSender();
-                        uniqueMessages[key] = msg;
-                    }
-                }
-                roomDataFile.close();
-            }
-            
-            // Add new messages, overwriting any with the same timestamp and sender
-            QVector<Message> newMessages = room->getMessages();
-            for (const Message &msg : newMessages) {
-                QString key = msg.getTimestamp().toString(Qt::ISODate) + "_" + msg.getSender();
-                uniqueMessages[key] = msg;
-            }
-            
-            // Now write all unique messages back to file
-            if (roomDataFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                QTextStream roomOut(&roomDataFile);
-                for (const Message &msg : uniqueMessages.values()) {
-                    roomOut << msg.toString() << "\n";
-                }
-                roomDataFile.close();
-            }
+            // Room messages are now saved directly by the Room class
+            // in the addMessage method, so we don't need to save them here
         }
+        
+        file.close();
+    } else {
+        qDebug() << "Server: Failed to open file for writing:" << file.errorString();
     }
 }
 
@@ -440,4 +417,220 @@ server::~server() {
     clients.clear();
     currentClient = nullptr;
     saveUsersAccounts();
+}
+
+void server::migrateRoomFiles() {
+    qDebug() << "Checking for inconsistent room files to migrate...";
+    
+    // Create rooms directory if it doesn't exist
+    QDir dir;
+    dir.mkpath("../db/rooms");
+    
+    // Get all room files
+    QDir roomsDir("../db/rooms");
+    QStringList roomFiles = roomsDir.entryList(QDir::Files);
+    
+    QStringList migratedFiles;
+    QStringList problemFiles;
+    
+    // First handle nickname vs email conflicts
+    qDebug() << "Looking for nickname vs email conflicts...";
+    
+    // Group room files by user pairs (ignoring formatting differences)
+    QMap<QString, QStringList> userPairToRoomIds;
+    
+    for (const QString &filename : roomFiles) {
+        if (!filename.endsWith(".txt")) continue;
+        
+        QString roomId = filename;
+        roomId.chop(4); // Remove .txt extension
+        
+        // Check if this is a valid room ID format
+        if (!roomId.contains("_")) {
+            problemFiles << roomId;
+            continue;
+        }
+        
+        QStringList users = roomId.split("_");
+        if (users.size() != 2) {
+            problemFiles << roomId;
+            continue;
+        }
+        
+        // Normalize users to emails for consistent matching
+        QString user1 = users[0];
+        QString user2 = users[1];
+        
+        // Normalize to email format
+        if (!user1.contains("@")) {
+            user1 += "@gmail.com";
+        }
+        
+        if (!user2.contains("@")) {
+            user2 += "@gmail.com";
+        }
+        
+        // Create a consistent key regardless of order
+        QString userPairKey = user1 < user2 ? user1 + "+" + user2 : user2 + "+" + user1;
+        
+        if (!userPairToRoomIds.contains(userPairKey)) {
+            userPairToRoomIds[userPairKey] = QStringList();
+        }
+        
+        userPairToRoomIds[userPairKey].append(roomId);
+    }
+    
+    // For any user pair with multiple room IDs, merge them
+    QMapIterator<QString, QStringList> i(userPairToRoomIds);
+    while (i.hasNext()) {
+        i.next();
+        
+        if (i.value().size() > 1) {
+            qDebug() << "Found conflict for users:" << i.key() << "with" << i.value().size() << "room files";
+            
+            // Extract the canonical users from the key
+            QStringList canonicalUsers = i.key().split("+");
+            QString canonicalUser1 = canonicalUsers[0];
+            QString canonicalUser2 = canonicalUsers[1];
+            
+            // Generate the correct room ID
+            QString correctRoomId = Room::generateRoomId(canonicalUser1, canonicalUser2);
+            QString correctPath = "../db/rooms/" + correctRoomId + ".txt";
+            
+            qDebug() << "Canonical room ID should be:" << correctRoomId;
+            
+            // Create the correct file if it doesn't exist
+            if (!QFile::exists(correctPath)) {
+                QFile::copy(
+                    "../db/rooms/" + i.value().first() + ".txt", 
+                    correctPath
+                );
+            }
+            
+            // Merge all files into the canonical one
+            for (const QString &roomId : i.value()) {
+                if (roomId == correctRoomId) continue; // Skip if it's the canonical one
+                
+                QString roomPath = "../db/rooms/" + roomId + ".txt";
+                
+                qDebug() << "Merging" << roomId << "into" << correctRoomId;
+                
+                QFile roomFile(roomPath);
+                QFile correctFile(correctPath);
+                
+                if (roomFile.open(QIODevice::ReadOnly | QIODevice::Text) && 
+                    correctFile.open(QIODevice::Append | QIODevice::Text)) {
+                    
+                    QTextStream in(&roomFile);
+                    QTextStream out(&correctFile);
+                    
+                    // Copy all messages
+                    while (!in.atEnd()) {
+                        QString line = in.readLine();
+                        if (!line.trimmed().isEmpty()) {
+                            out << line << "\n";
+                        }
+                    }
+                    
+                    roomFile.close();
+                    correctFile.close();
+                    
+                    // Delete the duplicate file
+                    QFile::remove(roomPath);
+                    migratedFiles << roomId + " -> " << correctRoomId;
+                }
+            }
+        }
+    }
+    
+    // Now update user files to reference the correct room IDs
+    QDir usersDir("../db/users");
+    QStringList userFiles = usersDir.entryList(QDir::Files);
+    
+    for (const QString &userFile : userFiles) {
+        if (!userFile.endsWith(".txt")) continue;
+        
+        QString userId = userFile;
+        userId.chop(4); // Remove .txt extension
+        
+        QString filePath = "../db/users/" + userFile;
+        QFile file(filePath);
+        
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            continue;
+        }
+        
+        QStringList lines;
+        QTextStream in(&file);
+        bool needsUpdate = false;
+        
+        while (!in.atEnd()) {
+            QString line = in.readLine();
+            
+            if (line.startsWith("ROOM:")) {
+                QStringList parts = line.mid(5).split('|');
+                if (parts.size() >= 2) {
+                    QString roomId = parts[0];
+                    QString roomName = parts[1];
+                    
+                    // Check if this room ID needs normalization
+                    QStringList users = roomName.split("_");
+                    if (users.size() == 2) {
+                        QString user1 = users[0];
+                        QString user2 = users[1];
+                        
+                        // Normalize user IDs
+                        if (!user1.contains("@")) {
+                            user1 += "@gmail.com";
+                        }
+                        
+                        if (!user2.contains("@")) {
+                            user2 += "@gmail.com";
+                        }
+                        
+                        QString correctRoomId = Room::generateRoomId(user1, user2);
+                        QString correctRoomName = user1 < user2 ? user1 + "_" + user2 : user2 + "_" + user1;
+                        
+                        if (roomId != correctRoomId || roomName != correctRoomName) {
+                            line = "ROOM:" + correctRoomId + "|" + correctRoomName;
+                            needsUpdate = true;
+                            qDebug() << "Updated room reference:" << roomId << "->" << correctRoomId;
+                        }
+                    }
+                }
+            }
+            
+            lines.append(line);
+        }
+        
+        file.close();
+        
+        if (needsUpdate) {
+            // Write the updated file
+            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream out(&file);
+                for (const QString &line : lines) {
+                    out << line << "\n";
+                }
+                file.close();
+                qDebug() << "Updated room references in user file:" << userId;
+            }
+        }
+    }
+    
+    if (!migratedFiles.isEmpty()) {
+        qDebug() << "Migrated" << migratedFiles.size() << "room files:";
+        for (const QString &info : migratedFiles) {
+            qDebug() << "  " << info;
+        }
+    } else {
+        qDebug() << "No room files needed migration.";
+    }
+    
+    if (!problemFiles.isEmpty()) {
+        qDebug() << "Problem files that couldn't be fixed automatically:";
+        for (const QString &info : problemFiles) {
+            qDebug() << "  " << info;
+        }
+    }
 }

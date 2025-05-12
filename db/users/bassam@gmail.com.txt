@@ -1,0 +1,4 @@
+CONTACT:hamdy@gmail.com
+CONTACT:khalx@gmail.com
+ROOM:bassam@gmail.com_hamdy@gmail.com|bassam@gmail.com_hamdy@gmail.com
+ROOM:bassam@gmail.com_khalx@gmail.com|bassam@gmail.com_khalx@gmail.com

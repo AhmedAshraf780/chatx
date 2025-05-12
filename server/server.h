@@ -39,6 +39,7 @@ private:
     void saveUsersAccounts();
     void loadClientData(Client* client);
     void saveClientData(Client* client);
+    void migrateRoomFiles();
 
 public:
     // Destructor

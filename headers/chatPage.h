@@ -47,6 +47,7 @@ struct UserInfo {
     QString lastMessage;
     QString lastSeen;
     bool isContact;  // Flag to indicate if this is a contact
+    bool hasMessages; // Flag to indicate if there are messages with this user
 };
 
 // Message Structure
@@ -63,6 +64,9 @@ public:
     explicit ChatPage(QWidget *parent = nullptr);
     ~ChatPage();
     void loadUsersFromDatabase();  // Moved to public section
+
+private slots:
+    void logout(); // Method to handle logout
 
 private:
     // UI Elements
@@ -96,7 +100,6 @@ private:
     void showMessageOptions(QWidget *bubble);
     void addToContacts(int userId);  // New method to add a user to contacts
     void loadMessagesForCurrentUser();
-
 };
 
 #endif // CHATPAGE_H

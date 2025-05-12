@@ -22,13 +22,19 @@ public:
     QString getName() const { return name; }
     QVector<Message> getMessages() const { return messages; }
     QDateTime getLastActivity() const { return lastActivity; }
+    
+    // Setter for roomId (for ensuring consistency)
+    void setRoomId(const QString& id) { roomId = id; }
 
     // Message management
     void addMessage(const Message& msg);
     void removeMessage(int index);
     void clearMessages();
-    void loadMessages(); // Added declaration for loadMessages
-    void updateLastActivity(); // Added declaration for updateLastActivity
+    void loadMessages();
+    void updateLastActivity();
+
+    // Static helper method to generate consistent room ID based on usernames without hashing
+    static QString generateRoomId(const QString& user1, const QString& user2);
 };
 
 #endif // ROOM_H
