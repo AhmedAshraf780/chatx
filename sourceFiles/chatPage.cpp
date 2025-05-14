@@ -20,6 +20,15 @@
 #include <QStackedWidget>
 #include <QTextEdit>
 #include <QVBoxLayout>
+#include <QComboBox>
+#include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMessageBox>
+#include <QTextStream>
+#include <QCheckBox>
+#include <QTimer>
 
 ChatPage::ChatPage(QWidget *parent)
     : QWidget(parent), currentUserId(-1), isSearching(false) {
@@ -42,6 +51,46 @@ ChatPage::ChatPage(QWidget *parent)
     messageInput->clear();
     messageLayout->addStretch();
     
+<<<<<<< HEAD
+=======
+    // Reset to Chat tab (index 0)
+    contentStack->setCurrentIndex(0);
+    
+    // Reset navigation buttons to show Chat button as selected
+    for (int j = 0; j < navButtons.size(); j++) {
+        navButtons[j]->setStyleSheet(
+            QString(R"(
+            background-color: %1;
+            border-radius: 12px;
+            color: white;
+            font-size: 18px;
+        )")
+                .arg(j == 0 ? "#4d6eaa" : "#2e2e3e")); // Highlight Chat button
+    }
+    
+    // Ensure users sidebar is visible
+    usersSidebar->show();
+    
+    // Load user settings
+    loadUserSettings();
+    
+    // Ensure the user is set to offline by default
+    Client *client = server::getInstance()->getCurrentClient();
+    if (client) {
+        QString userId = client->getUserId();
+        server::getInstance()->setUserOnlineStatus(userId, false);
+        
+        // Update checkbox to reflect offline status
+        if (onlineStatusCheckbox) {
+            onlineStatusCheckbox->blockSignals(true);
+            onlineStatusCheckbox->setChecked(false);
+            onlineStatusCheckbox->blockSignals(false);
+            userSettings.isOnline = false;
+            qDebug() << "Set default status to offline for user:" << userId;
+        }
+    }
+
+>>>>>>> bfd0fc2 (handle the settings)
     // Load users from database
     loadUsersFromDatabase();
 
@@ -57,6 +106,11 @@ ChatPage::ChatPage(QWidget *parent)
             }
         }
     }
+    
+    // Set up timer to refresh online status every 10 seconds
+    onlineStatusTimer = new QTimer(this);
+    connect(onlineStatusTimer, &QTimer::timeout, this, &ChatPage::refreshOnlineStatus);
+    onlineStatusTimer->start(10000); // 10 seconds
 }
 
 ChatPage::~ChatPage() {
@@ -125,6 +179,42 @@ void ChatPage::createNavigationPanel(QHBoxLayout *mainLayout) {
             // Show appropriate view in stack
             if (i < contentStack->count()) {
                 contentStack->setCurrentIndex(i);
+                
+                // Show usersSidebar only when in Chat view (index 0)
+                if (i == 0) {
+                    usersSidebar->show();
+                } else {
+                    usersSidebar->hide();
+                }
+                
+                // If showing settings, refresh the settings UI and ensure offline status
+                if (i == 3) { // Settings index
+                    loadUserSettings(); // Refresh settings when tab is selected
+                    
+                    // Always set to offline in settings page
+                    if (onlineStatusCheckbox) {
+                        Client *client = server::getInstance()->getCurrentClient();
+                        if (client) {
+                            QString userId = client->getUserId();
+                            
+                            // Set to offline
+                            server::getInstance()->setUserOnlineStatus(userId, false);
+                            
+                            // Update UI to show offline
+                            onlineStatusCheckbox->blockSignals(true);
+                            onlineStatusCheckbox->setChecked(false);
+                            onlineStatusCheckbox->blockSignals(false);
+                            
+                            // Update settings
+                            userSettings.isOnline = false;
+                            
+                            qDebug() << "Set offline on settings page for user:" << userId;
+                            
+                            // Force refresh the user list to update online status
+                            refreshOnlineStatus();
+                        }
+                    }
+                }
             }
         });
     }
@@ -150,7 +240,7 @@ void ChatPage::createNavigationPanel(QHBoxLayout *mainLayout) {
 
 void ChatPage::createUsersPanel(QHBoxLayout *mainLayout) {
     // Users Sidebar (left side)
-    QWidget *usersSidebar = new QWidget;
+    usersSidebar = new QWidget;
     usersSidebar->setFixedWidth(250);
     usersSidebar->setStyleSheet(
         "background-color: #1e1e2e; border-right: 1px solid #2e2e3e;");
@@ -291,10 +381,106 @@ void ChatPage::createChatArea(QHBoxLayout *mainLayout) {
     // 4. Settings View
     QWidget *settingsView = new QWidget;
     QVBoxLayout *settingsLayout = new QVBoxLayout(settingsView);
-    QLabel *settingsLabel = new QLabel("Settings Feature Coming Soon");
-    settingsLabel->setAlignment(Qt::AlignCenter);
-    settingsLabel->setStyleSheet("color: white; font-size: 24px;");
-    settingsLayout->addWidget(settingsLabel);
+    settingsLayout->setAlignment(Qt::AlignTop);
+    settingsLayout->setContentsMargins(40, 40, 40, 40);
+    settingsLayout->setSpacing(20);
+    
+    // Settings Header
+    QLabel *settingsHeader = new QLabel("User Settings");
+    settingsHeader->setStyleSheet("color: white; font-size: 28px; font-weight: bold; margin-bottom: 20px;");
+    settingsLayout->addWidget(settingsHeader);
+    
+    // Nickname Section
+    QLabel *nicknameLabel = new QLabel("Nickname:");
+    nicknameLabel->setStyleSheet("color: white; font-size: 16px;");
+    nicknameEdit = new QLineEdit();
+    nicknameEdit->setStyleSheet(R"(
+        background-color: #2e2e3e;
+        color: white;
+        border-radius: 8px;
+        padding: 10px;
+        border: none;
+        font-size: 15px;
+    )");
+    nicknameEdit->setFixedHeight(40);
+    
+    // Bio Section
+    QLabel *bioLabel = new QLabel("Bio:");
+    bioLabel->setStyleSheet("color: white; font-size: 16px;");
+    bioEdit = new QTextEdit();
+    bioEdit->setStyleSheet(R"(
+        background-color: #2e2e3e;
+        color: white;
+        border-radius: 8px;
+        padding: 10px;
+        border: none;
+        font-size: 15px;
+    )");
+    bioEdit->setFixedHeight(100);
+    
+    // Online Status (WiFi) Toggle
+    QLabel *onlineLabel = new QLabel("WiFi (Online Status):");
+    onlineLabel->setStyleSheet("color: white; font-size: 16px;");
+    onlineStatusCheckbox = new QCheckBox("Show me as online to others");
+    onlineStatusCheckbox->setStyleSheet(R"(
+        color: white;
+        font-size: 15px;
+    )");
+    
+    // Connect online status toggle
+    connect(onlineStatusCheckbox, &QCheckBox::stateChanged, this, &ChatPage::onlineStatusChanged);
+    
+    // Delete Account Button
+    QPushButton *deleteAccountButton = new QPushButton("Delete Account");
+    deleteAccountButton->setStyleSheet(R"(
+        background-color: #E15554;
+        color: white;
+        border-radius: 8px;
+        padding: 12px;
+        border: none;
+        font-size: 15px;
+        font-weight: bold;
+    )");
+    deleteAccountButton->setFixedWidth(200);
+    
+    // Confirm Button
+    QPushButton *confirmButton = new QPushButton("Save Changes");
+    confirmButton->setStyleSheet(R"(
+        background-color: #4d6eaa;
+        color: white;
+        border-radius: 8px;
+        padding: 12px;
+        border: none;
+        font-size: 15px;
+        font-weight: bold;
+    )");
+    confirmButton->setFixedWidth(200);
+    
+    // Add widgets to layout
+    settingsLayout->addWidget(nicknameLabel);
+    settingsLayout->addWidget(nicknameEdit);
+    settingsLayout->addWidget(bioLabel);
+    settingsLayout->addWidget(bioEdit);
+    settingsLayout->addWidget(onlineLabel);
+    settingsLayout->addWidget(onlineStatusCheckbox);
+    
+    // Add some spacing before the buttons
+    settingsLayout->addSpacing(20);
+    
+    // Add buttons in a horizontal layout
+    QHBoxLayout *buttonsLayout = new QHBoxLayout();
+    buttonsLayout->addWidget(deleteAccountButton);
+    buttonsLayout->addStretch();
+    buttonsLayout->addWidget(confirmButton);
+    settingsLayout->addLayout(buttonsLayout);
+    
+    // Add a stretch at the end to push everything to the top
+    settingsLayout->addStretch();
+    
+    // Connect signals to slots
+    connect(confirmButton, &QPushButton::clicked, this, &ChatPage::saveUserSettings);
+    connect(deleteAccountButton, &QPushButton::clicked, this, &ChatPage::deleteUserAccount);
+    
     contentStack->addWidget(settingsView);
 
     mainLayout->addWidget(contentStack);
@@ -353,6 +539,25 @@ void ChatPage::loadUsersFromDatabase() {
     userMessages.clear();
     usersListWidget->clear();
     
+<<<<<<< HEAD
+=======
+    // Reset UI to default state
+    contentStack->setCurrentIndex(0); // Show the chat view
+    usersSidebar->show(); // Ensure user sidebar is visible
+    
+    // Show all nav buttons in default state (Chat selected)
+    for (int j = 0; j < navButtons.size(); j++) {
+        navButtons[j]->setStyleSheet(
+            QString(R"(
+            background-color: %1;
+            border-radius: 12px;
+            color: white;
+            font-size: 18px;
+        )")
+                .arg(j == 0 ? "#4d6eaa" : "#2e2e3e")); // Highlight Chat button
+    }
+    
+>>>>>>> bfd0fc2 (handle the settings)
     // Clear chat area
     QLayoutItem *item;
     while ((item = messageLayout->takeAt(0)) != nullptr) {
@@ -366,6 +571,10 @@ void ChatPage::loadUsersFromDatabase() {
     // Reset current user
     currentUserId = -1;
     chatHeader->setText("Select a user");
+<<<<<<< HEAD
+=======
+    messageInput->clear();
+>>>>>>> bfd0fc2 (handle the settings)
 
     // Get all users from the server
     QVector<QPair<QString, QString>> allUsers =
@@ -393,6 +602,12 @@ void ChatPage::loadUsersFromDatabase() {
     QVector<UserInfo> usersWithMessagesVec; // To store users with messages (will be pinned)
     QVector<UserInfo> regularUsers;         // To store users without messages
 
+<<<<<<< HEAD
+=======
+    // Get server instance for online status
+    server *srv = server::getInstance();
+
+>>>>>>> bfd0fc2 (handle the settings)
     // Add all users to the list except current user
     for (const auto &user : allUsers) {
         QString email = user.first;
@@ -407,7 +622,8 @@ void ChatPage::loadUsersFromDatabase() {
         UserInfo userInfo;
         userInfo.name = username;
         userInfo.email = email;
-        userInfo.status = "Offline"; // Default status
+        userInfo.isOnline = srv->isUserOnline(email);
+        userInfo.status = userInfo.isOnline ? "Online" : "Offline";
         userInfo.lastMessage = "";
         userInfo.lastSeen = "";
         userInfo.isContact = currentClient->hasContact(email);
@@ -483,6 +699,17 @@ void ChatPage::handleUserSelected(int row) {
 
     // Only update if the selected user changes
     if (currentUserId != index) {
+        // Get latest bio and status for the selected user
+        server *srv = server::getInstance();
+        if (srv) {
+            QString nickname, bio;
+            if (srv->getUserSettings(userList[index].email, nickname, bio)) {
+                // Update user status
+                userList[index].isOnline = srv->isUserOnline(userList[index].email);
+                userList[index].status = userList[index].isOnline ? "Online" : "Offline";
+            }
+        }
+        
         currentUserId = index;
         updateChatArea(index);
     }
@@ -496,7 +723,22 @@ void ChatPage::updateChatArea(int index) {
 
     // Update header
     const UserInfo &user = userList[index];
-    chatHeader->setText(user.name + " - " + user.status);
+    
+    // Get user's bio from server if available
+    QString bio = "";
+    server *srv = server::getInstance();
+    QString nickname, fetchedBio;
+    if (srv && srv->getUserSettings(user.email, nickname, fetchedBio)) {
+        bio = fetchedBio;
+    }
+    
+    // Create display text with status and bio
+    QString headerText = user.name + " - " + user.status;
+    if (!bio.isEmpty()) {
+        headerText += " (" + bio + ")";
+    }
+    
+    chatHeader->setText(headerText);
 
     // Clear existing messages from UI
     QLayoutItem *item;
@@ -573,6 +815,55 @@ void ChatPage::sendMessage() {
 
     // Add the message to the file and in-memory structure
     room->addMessage(msg);
+    
+    // Save messages to disk immediately
+    room->saveMessages();
+    qDebug() << "Saved message to disk for room:" << room->getRoomId();
+    
+    // Make sure the message is also added to the server's in-memory structure
+    server *srv = server::getInstance();
+    QVector<Message> roomMsgs = room->getMessages();
+    srv->updateRoomMessages(room->getRoomId(), roomMsgs);
+    
+    // IMPORTANT: Add the room to the recipient's rooms in the server's in-memory structure
+    // This ensures that when the recipient logs in, they'll see this conversation
+    QString senderEmail = client->getUserId();
+    QString roomId = room->getRoomId();
+    
+    // First, check if a Client object exists for the recipient
+    if (!srv->hasClient(targetId)) {
+        // The target user isn't logged in, so add the room to their data manually
+        
+        // 1. Make sure the contact list contains the sender
+        srv->addContactForUser(targetId, senderEmail);
+        
+        // 2. Make sure the room exists in the recipient's rooms
+        if (!srv->hasRoomForUser(targetId, roomId)) {
+            // Create a copy of the room for the recipient
+            Room *recipientRoom = new Room(room->getName());
+            recipientRoom->setMessages(roomMsgs);
+            srv->addRoomToUser(targetId, recipientRoom);
+        }
+    } else {
+        // The target user is logged in, so update their Client object
+        Client *targetClient = srv->getClient(targetId);
+        if (targetClient) {
+            // Add contact if needed
+            if (!targetClient->hasContact(senderEmail)) {
+                targetClient->addContact(senderEmail);
+                qDebug() << "Added" << senderEmail << "as contact for logged in user" << targetId;
+            }
+            
+            // Add room if needed
+            if (!targetClient->getRoom(roomId)) {
+                // Create a room with the same data
+                Room *recipientRoom = new Room(room->getName());
+                recipientRoom->setMessages(roomMsgs);
+                targetClient->addRoom(recipientRoom);
+                qDebug() << "Added room to logged in user" << targetId;
+            }
+        }
+    }
 
     // Update the last message and UI
     userList[currentUserId].lastMessage = messageText;
@@ -723,6 +1014,39 @@ void ChatPage::showMessageOptions(QWidget *bubble) {
                         userList[currentUserId].lastMessage = newText;
                         updateUsersList();
                     }
+
+                    // Get the room and update the message in the room
+                    Client *client = server::getInstance()->getCurrentClient();
+                    if (client) {
+                        QString targetId = userList[currentUserId].email.isEmpty() ? 
+                                          userList[currentUserId].name : userList[currentUserId].email;
+                        Room *room = client->getRoomWithUser(targetId);
+                        if (room) {
+                            // Update the message in the room
+                            QVector<Message> messages = room->getMessages();
+                            for (int j = 0; j < messages.size(); j++) {
+                                if (messages[j].getTimestamp() == timestamp) {
+                                    // We can't modify the message directly, so remove and add a new one
+                                    room->removeMessage(j);
+                                    Message newMsg(newText, client->getUserId());
+                                    room->addMessage(newMsg);
+                                    break;
+                                }
+                            }
+                            // Save changes to disk
+                            room->saveMessages();
+                            
+                            // Update the server's in-memory message structure for both users
+                            server *srv = server::getInstance();
+                            QString roomId = room->getRoomId();
+                            QVector<Message> updatedMsgs = room->getMessages();
+                            
+                            // Update messages in server
+                            srv->updateRoomMessages(roomId, updatedMsgs);
+                            
+                            qDebug() << "Saved edited message to disk for room:" << room->getRoomId();
+                        }
+                    }
                 }
             }
         }
@@ -756,6 +1080,36 @@ void ChatPage::showMessageOptions(QWidget *bubble) {
                 userList[currentUserId].lastMessage = "";
                 updateUsersList();
             }
+
+            // Get the room and remove the message from the room
+            Client *client = server::getInstance()->getCurrentClient();
+            if (client) {
+                QString targetId = userList[currentUserId].email.isEmpty() ? 
+                                  userList[currentUserId].name : userList[currentUserId].email;
+                Room *room = client->getRoomWithUser(targetId);
+                if (room) {
+                    // Find and remove the message
+                    QVector<Message> messages = room->getMessages();
+                    for (int j = 0; j < messages.size(); j++) {
+                        if (messages[j].getTimestamp() == timestamp) {
+                            room->removeMessage(j);
+                            break;
+                        }
+                    }
+                    // Save changes to disk
+                    room->saveMessages();
+                    
+                    // Update the server's in-memory message structure for both users
+                    server *srv = server::getInstance();
+                    QString roomId = room->getRoomId();
+                    QVector<Message> updatedMsgs = room->getMessages();
+                    
+                    // Update messages in server
+                    srv->updateRoomMessages(roomId, updatedMsgs);
+                    
+                    qDebug() << "Saved changes after message deletion for room:" << room->getRoomId();
+                }
+            }
         }
     });
 
@@ -774,6 +1128,15 @@ QListWidgetItem *ChatPage::createUserListItem(const UserInfo &user, int index) {
         "stop:0 #6a82fb, stop:1 #fc5c7d" : // More vibrant for pinned users
         "stop:0 #808080, stop:1 #a0a0a0";  // Gray for regular users
     
+<<<<<<< HEAD
+=======
+    // Create avatar with online indicator
+    QWidget *avatarContainer = new QWidget();
+    QVBoxLayout *avatarLayout = new QVBoxLayout(avatarContainer);
+    avatarLayout->setContentsMargins(0, 0, 0, 0);
+    avatarLayout->setSpacing(0);
+
+>>>>>>> bfd0fc2 (handle the settings)
     QLabel *avatar = new QLabel(user.name.left(1).toUpper());
     avatar->setFixedSize(44, 44);
     avatar->setAlignment(Qt::AlignCenter);
@@ -785,17 +1148,52 @@ QListWidgetItem *ChatPage::createUserListItem(const UserInfo &user, int index) {
         font-size: 22px;
         border: 2px solid #23233a;
     )").arg(gradientColors));
+<<<<<<< HEAD
+
+    QWidget *textContainer = new QWidget;
+    QVBoxLayout *textLayout = new QVBoxLayout(textContainer);
+    textLayout->setContentsMargins(0, 0, 0, 0);
+    textLayout->setSpacing(2);
+=======
+    
+    avatarLayout->addWidget(avatar, 0, Qt::AlignCenter);
+    
+    // Add online status indicator
+    QLabel *statusIndicator = new QLabel();
+    statusIndicator->setFixedSize(12, 12);
+    statusIndicator->setStyleSheet(QString(R"(
+        background-color: %1;
+        border-radius: 6px;
+        border: 1px solid #23233a;
+    )").arg(user.isOnline ? "#4CAF50" : "#9E9E9E")); // Green for online, gray for offline
+    
+    // Position status indicator at bottom right of avatar
+    QHBoxLayout *indicatorLayout = new QHBoxLayout();
+    indicatorLayout->addStretch();
+    indicatorLayout->addWidget(statusIndicator);
+    avatarLayout->addLayout(indicatorLayout);
+>>>>>>> bfd0fc2 (handle the settings)
 
     QWidget *textContainer = new QWidget;
     QVBoxLayout *textLayout = new QVBoxLayout(textContainer);
     textLayout->setContentsMargins(0, 0, 0, 0);
     textLayout->setSpacing(2);
 
+    // Create name label - removed bio
     QLabel *nameLabel = new QLabel(user.name);
     nameLabel->setStyleSheet("color: white; font-size: 17px; font-weight: 600;");
     
     textLayout->addWidget(nameLabel);
     
+<<<<<<< HEAD
+=======
+    // Status label showing online/offline
+    QLabel *statusLabel = new QLabel(user.status);
+    statusLabel->setStyleSheet(QString("color: %1; font-size: 12px;")
+                               .arg(user.isOnline ? "#4CAF50" : "#9E9E9E"));
+    textLayout->addWidget(statusLabel);
+    
+>>>>>>> bfd0fc2 (handle the settings)
     // Add pin indicator for users with messages
     if (user.hasMessages) {
         QLabel *pinnedLabel = new QLabel("📌 Pinned chat");
@@ -807,7 +1205,11 @@ QListWidgetItem *ChatPage::createUserListItem(const UserInfo &user, int index) {
         textLayout->addWidget(lastMsgLabel);
     }
     
+<<<<<<< HEAD
     layout->addWidget(avatar);
+=======
+    layout->addWidget(avatarContainer);
+>>>>>>> bfd0fc2 (handle the settings)
     layout->addWidget(textContainer, 1);
 
     QListWidgetItem *item = new QListWidgetItem;
@@ -883,4 +1285,308 @@ void ChatPage::loadMessagesForCurrentUser() {
 
     qDebug() << "Loaded" << userMessages[currentUserId].size()
              << "messages for user" << targetId;
+<<<<<<< HEAD
+=======
+}
+
+void ChatPage::loadUserSettings() {
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client) {
+        qDebug() << "Cannot load settings: No active client";
+        return;
+    }
+    
+    QString userId = client->getUserId();
+    qDebug() << "Loading settings for user:" << userId;
+    
+    // Get settings from server
+    QString nickname, bio;
+    bool isOnline = false;
+    
+    // Check if server has settings
+    bool hasSettings = server::getInstance()->getUserSettings(userId, nickname, bio);
+    isOnline = server::getInstance()->isUserOnline(userId);
+    
+    // Store settings in memory
+    userSettings.nickname = nickname.isEmpty() ? client->getUsername() : nickname;
+    userSettings.bio = bio;
+    userSettings.isOnline = isOnline;
+    
+    // Update UI elements with loaded settings
+    if (nicknameEdit) {
+        nicknameEdit->setText(userSettings.nickname);
+    }
+    
+    if (bioEdit) {
+        bioEdit->setText(userSettings.bio);
+    }
+    
+    if (onlineStatusCheckbox) {
+        onlineStatusCheckbox->blockSignals(true);
+        onlineStatusCheckbox->setChecked(userSettings.isOnline);
+        onlineStatusCheckbox->blockSignals(false);
+    }
+    
+    qDebug() << "Settings loaded - Nickname:" << userSettings.nickname 
+             << "Bio:" << userSettings.bio
+             << "Online:" << userSettings.isOnline;
+}
+
+void ChatPage::saveUserSettings() {
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client) {
+        qDebug() << "Cannot save settings: No active client";
+        return;
+    }
+    
+    // Get settings from UI
+    QString newNickname = nicknameEdit->text();
+    QString newBio = bioEdit->toPlainText();
+    bool newOnlineStatus = onlineStatusCheckbox->isChecked();
+    
+    // Check if anything has changed
+    bool hasChanges = (newNickname != userSettings.nickname) || 
+                     (newBio != userSettings.bio) || 
+                     (newOnlineStatus != userSettings.isOnline);
+    
+    if (!hasChanges) {
+        QMessageBox::information(this, "No Changes", 
+            "No changes were made to your settings.");
+        return;
+    }
+    
+    // Update local settings
+    userSettings.nickname = newNickname;
+    userSettings.bio = newBio;
+    userSettings.isOnline = newOnlineStatus;
+    
+    QString userId = client->getUserId();
+    qDebug() << "Saving settings for user:" << userId;
+    
+    // Save settings to server
+    bool nicknameBioSuccess = server::getInstance()->updateUserSettings(userId, userSettings.nickname, userSettings.bio);
+    bool onlineSuccess = server::getInstance()->setUserOnlineStatus(userId, userSettings.isOnline);
+    
+    if (nicknameBioSuccess && onlineSuccess) {
+        qDebug() << "Settings saved - Nickname:" << userSettings.nickname 
+                << "Bio:" << userSettings.bio
+                << "Online:" << userSettings.isOnline;
+        
+        // If bio or nickname changed, force UI refresh
+        if (newNickname != userSettings.nickname || newBio != userSettings.bio) {
+            // Force refresh the UI to show updated bio in chat headers
+            refreshOnlineStatus();
+            qDebug() << "Refreshed UI to show updated bio/nickname";
+        }
+        
+        // Show success message to user
+        QMessageBox::information(this, "Settings Saved", 
+            "Your settings have been saved successfully.");
+            
+        // Refresh UI
+        refreshOnlineStatus();
+    } else {
+        QMessageBox::warning(this, "Error", 
+            "There was a problem saving your settings. Please try again.");
+    }
+}
+
+void ChatPage::deleteUserAccount() {
+    // Ask for confirmation
+    QMessageBox::StandardButton confirm = QMessageBox::question(
+        this, 
+        "Delete Account", 
+        "Are you sure you want to delete your account? This action cannot be undone.",
+        QMessageBox::Yes | QMessageBox::No
+    );
+    
+    if (confirm == QMessageBox::Yes) {
+        Client *client = server::getInstance()->getCurrentClient();
+        if (!client) {
+            QMessageBox::warning(this, "Error", "Cannot delete account: No active user");
+            return;
+        }
+        
+        QString userId = client->getUserId();
+        qDebug() << "Deleting account for user:" << userId;
+        
+        // Delete user from server
+        bool success = server::getInstance()->deleteUser(userId);
+        
+        if (success) {
+            // Delete user file
+            QString userFile = "../db/users/" + userId + ".txt";
+            QFile::remove(userFile);
+            
+            QMessageBox::information(this, "Account Deleted", 
+                "Your account has been deleted successfully.");
+            
+            // Logout and return to login screen
+            logout();
+        } else {
+            QMessageBox::warning(this, "Error", 
+                "Failed to delete account. Please try again later.");
+        }
+    }
+}
+
+void ChatPage::onlineStatusChanged(int state) {
+    bool isOnline = (state == Qt::Checked);
+    
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client) {
+        qDebug() << "Cannot update online status: No active client";
+        return;
+    }
+    
+    QString userId = client->getUserId();
+    userSettings.isOnline = isOnline;
+    
+    // Update the server with the new status immediately
+    bool success = server::getInstance()->setUserOnlineStatus(userId, isOnline);
+    
+    if (success) {
+        qDebug() << "Online status changed to:" << (isOnline ? "Online" : "Offline") << "for user:" << userId;
+        
+        // Force update of UserInfo in userList
+        for (int i = 0; i < userList.size(); ++i) {
+            // If this is the current user, update the isOnline property
+            if (userList[i].email == userId) {
+                userList[i].isOnline = isOnline;
+                userList[i].status = isOnline ? "Online" : "Offline";
+                break;
+            }
+        }
+        
+        // Update UI to reflect the change
+        if (onlineStatusCheckbox) {
+            onlineStatusCheckbox->setChecked(isOnline);
+        }
+        
+        // Force refresh the user list to show updated status
+        updateUsersList();
+        
+        // Show visual confirmation
+        QMessageBox::information(this, "Status Updated", 
+            QString("Your status is now %1").arg(isOnline ? "Online" : "Offline"));
+    } else {
+        qDebug() << "Failed to update online status";
+        
+        // Restore the checkbox to previous state if update failed
+        if (onlineStatusCheckbox) {
+            onlineStatusCheckbox->setChecked(!isOnline);
+        }
+        
+        QMessageBox::warning(this, "Error", "Failed to update online status. Please try again.");
+    }
+    
+    // Manually trigger a refresh of the UI
+    refreshOnlineStatus();
+}
+
+void ChatPage::updateUserStatus(const QString &userId, bool isOnline) {
+    // Update the status in the user list
+    for (int i = 0; i < userList.size(); ++i) {
+        if (userList[i].email == userId) {
+            userList[i].status = isOnline ? "Online" : "Offline";
+            userList[i].isOnline = isOnline;
+            
+            // If this is the current user being displayed, update the header
+            if (i == currentUserId) {
+                // Get user's bio from server if available
+                QString bio = "";
+                server *srv = server::getInstance();
+                QString nickname, fetchedBio;
+                if (srv && srv->getUserSettings(userId, nickname, fetchedBio)) {
+                    bio = fetchedBio;
+                }
+                
+                // Create display text with status and bio
+                QString headerText = userList[i].name + " - " + userList[i].status;
+                if (!bio.isEmpty()) {
+                    headerText += " (" + bio + ")";
+                }
+                
+                chatHeader->setText(headerText);
+            }
+            
+            // Update the user in the list widget
+            for (int j = 0; j < usersListWidget->count(); ++j) {
+                QListWidgetItem *item = usersListWidget->item(j);
+                int index = item->data(Qt::UserRole).toInt();
+                if (index == i) {
+                    // Refresh this item
+                    QListWidgetItem *newItem = createUserListItem(userList[i], i);
+                    usersListWidget->takeItem(j);
+                    usersListWidget->insertItem(j, newItem);
+                    break;
+                }
+            }
+            
+            break;
+        }
+    }
+}
+
+void ChatPage::refreshOnlineStatus() {
+    // This method is called periodically by the timer to refresh online status of users
+    server *srv = server::getInstance();
+    if (!srv || !srv->getCurrentClient()) {
+        return;
+    }
+    
+    bool needsUiUpdate = false;
+    
+    // Check online status and bio for all users in the list
+    for (int i = 0; i < userList.size(); ++i) {
+        // Check online status changes
+        bool isOnline = srv->isUserOnline(userList[i].email);
+        bool onlineChanged = (userList[i].isOnline != isOnline);
+        
+        // Get user bio to check for changes
+        QString nickname, bio;
+        srv->getUserSettings(userList[i].email, nickname, bio);
+        
+        // Update user info if changes detected
+        if (onlineChanged) {
+            userList[i].isOnline = isOnline;
+            userList[i].status = isOnline ? "Online" : "Offline";
+            
+            // If this is the current user being displayed, update the header
+            if (i == currentUserId) {
+                // Create display text with status and bio
+                QString headerText = userList[i].name + " - " + userList[i].status;
+                if (!bio.isEmpty()) {
+                    headerText += " (" + bio + ")";
+                }
+                
+                chatHeader->setText(headerText);
+            }
+            
+            qDebug() << "Updated online status for" << userList[i].name 
+                    << (isOnline ? "Online" : "Offline");
+                    
+            needsUiUpdate = true;
+        }
+    }
+    
+    // Only update the UI if there were changes
+    if (needsUiUpdate) {
+        updateUsersList();
+    }
+    
+    // Check current user's online status and update checkbox if needed
+    Client *client = srv->getCurrentClient();
+    if (client) {
+        QString userId = client->getUserId();
+        bool isOnline = srv->isUserOnline(userId);
+        
+        if (onlineStatusCheckbox && onlineStatusCheckbox->isChecked() != isOnline) {
+            // Update checkbox without triggering signal
+            onlineStatusCheckbox->blockSignals(true);
+            onlineStatusCheckbox->setChecked(isOnline);
+            onlineStatusCheckbox->blockSignals(false);
+        }
+    }
+>>>>>>> bfd0fc2 (handle the settings)
 }

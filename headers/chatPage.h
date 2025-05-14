@@ -27,6 +27,8 @@
 #include <QTextEdit>
 #include <QListWidgetItem>
 #include <QDebug>
+#include <QCheckBox>
+#include <QTimer>
 #include "../server/server.h"
 
 class QVBoxLayout;
@@ -38,16 +40,27 @@ class QListWidget;
 class QStackedWidget;
 class QPushButton;
 class QEvent;
+class QTextEdit;
+class QCheckBox;
+class QTimer;
 
 // Forward declaration of UserInfo
 struct UserInfo {
     QString name;
-    QString email;  // Add this field if not present
+    QString email;
     QString status;
     QString lastMessage;
     QString lastSeen;
-    bool isContact;  // Flag to indicate if this is a contact
-    bool hasMessages; // Flag to indicate if there are messages with this user
+    bool isContact;     // Flag to indicate if this is a contact
+    bool hasMessages;   // Flag to indicate if there are messages with this user
+    bool isOnline;      // Flag to indicate if user is online
+};
+
+// User settings struct
+struct UserSettings {
+    QString nickname;
+    QString bio;
+    bool isOnline;
 };
 
 // Message Structure
@@ -67,6 +80,13 @@ public:
 
 private slots:
     void logout(); // Method to handle logout
+<<<<<<< HEAD
+=======
+    void saveUserSettings(); // Method to save user settings
+    void deleteUserAccount(); // Method to delete user account
+    void onlineStatusChanged(int state); // Handle online/offline toggle
+    void refreshOnlineStatus(); // Periodically refresh online status of users
+>>>>>>> bfd0fc2 (handle the settings)
 
 private:
     // UI Elements
@@ -79,12 +99,22 @@ private:
     QStackedWidget *contentStack;
     QVector<QPushButton*> navButtons;
     QListWidgetItem* createUserListItem(const UserInfo &user, int index);
+    
+    // Settings UI Elements
+    QLineEdit *nicknameEdit;
+    QTextEdit *bioEdit;
+    QCheckBox *onlineStatusCheckbox;
+    QWidget *usersSidebar; // Add reference to users sidebar widget
+    
+    // Timer for refreshing online status
+    QTimer *onlineStatusTimer;
 
     // Data
     QVector<UserInfo> userList;
     QVector<QVector<MessageInfo>> userMessages;
     int currentUserId;
     bool isSearching;  // Flag to indicate if we're in search mode
+    UserSettings userSettings; // Store user settings
 
     // Setup methods
     void createNavigationPanel(QHBoxLayout *mainLayout);
@@ -100,6 +130,11 @@ private:
     void showMessageOptions(QWidget *bubble);
     void addToContacts(int userId);  // New method to add a user to contacts
     void loadMessagesForCurrentUser();
+<<<<<<< HEAD
+=======
+    void loadUserSettings(); // Load user settings from storage
+    void updateUserStatus(const QString &userId, bool isOnline); // Update user's online status
+>>>>>>> bfd0fc2 (handle the settings)
 };
 
 #endif // CHATPAGE_H

@@ -1,0 +1,3 @@
+NICKNAME:amed
+BIO:Welcome to my profile!
+ONLINE:false

@@ -1,0 +1,3 @@
+NICKNAME:aymooon
+BIO:Welcome to my profile!
+ONLINE:false

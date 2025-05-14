@@ -1,0 +1,3 @@
+NICKNAME:loki
+BIO:loki was here
+ONLINE:true

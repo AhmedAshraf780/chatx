@@ -1,2 +1,7 @@
+<<<<<<< HEAD
+=======
+CONTACT:bassam@gmail.com
+ROOM:ashraf@gmail.com_bassam@gmail.com|ashraf@gmail.com_bassam@gmail.com
+>>>>>>> bfd0fc2 (handle the settings)
 ROOM:ashraf@gmail.com_hoss@gmail.com|ashraf@gmail.com_hoss@gmail.com
 ROOM:ashraf@gmail.com_loki@gmail.com|ashraf@gmail.com_loki@gmail.com

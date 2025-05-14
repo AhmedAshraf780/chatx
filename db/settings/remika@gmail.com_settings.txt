@@ -1,0 +1,3 @@
+NICKNAME:remika
+BIO:remika at the top
+ONLINE:true

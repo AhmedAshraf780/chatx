@@ -198,3 +198,11 @@ void Client::loadContacts() {
         qDebug() << "Could not open file for reading:" << file.errorString();
     }
 }
+
+void Client::addRoom(Room* room) {
+    if (!room) return;
+    
+    // Store room by its ID
+    rooms[room->getRoomId()] = room;
+    qDebug() << "Added existing room:" << room->getRoomId() << "to client" << userId;
+}

@@ -1,0 +1,3 @@
+NICKNAME:roka
+BIO:Welcome to my profile!
+ONLINE:false

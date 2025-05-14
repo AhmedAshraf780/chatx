@@ -50,6 +50,7 @@ void Room::addMessage(const Message& msg) {
     if (!messages.contains(msg)) {
         messages.append(msg);
         lastActivity = QDateTime::currentDateTime();
+<<<<<<< HEAD
 
         // Save the message to the room's file
         QString roomFile = "../db/rooms/" + roomId + ".txt";
@@ -64,6 +65,8 @@ void Room::addMessage(const Message& msg) {
         } else {
             qDebug() << "Failed to open file for writing:" << file.errorString();
         }
+=======
+>>>>>>> bfd0fc2 (handle the settings)
     }
 }
 
@@ -97,6 +100,38 @@ void Room::loadMessages() {
         qDebug() << "Loaded" << messages.size() << "messages from file";
     } else {
         qDebug() << "Failed to open file for reading:" << file.errorString();
+<<<<<<< HEAD
+=======
+    }
+}
+
+void Room::updateLastActivity() {
+    lastActivity = QDateTime::currentDateTime();
+}
+
+void Room::saveMessages() {
+    QString roomFile = "../db/rooms/" + roomId + ".txt";
+    qDebug() << "Saving all messages to file:" << roomFile;
+    
+    // Create the rooms directory if it doesn't exist
+    QDir dir("../db/rooms");
+    if (!dir.exists()) {
+        dir.mkpath(".");
+    }
+    
+    QFile file(roomFile);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QTextStream out(&file);
+        
+        for (const Message& msg : messages) {
+            out << msg.toString() << "\n";
+        }
+        
+        file.close();
+        qDebug() << "Saved" << messages.size() << "messages to file";
+    } else {
+        qDebug() << "Failed to open file for writing:" << file.errorString();
+>>>>>>> bfd0fc2 (handle the settings)
     }
 }
 
@@ -105,5 +140,7 @@ void Room::updateLastActivity() {
 }
 
 Room::~Room() {
-
+    // Save messages before destruction
+    saveMessages();
+    qDebug() << "Room" << roomId << "destroyed and messages saved";
 }

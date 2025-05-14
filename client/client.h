@@ -31,10 +31,13 @@ public:
 
     // Room management
     Room* getRoom(const QString& roomId);
-    Room* getRoomWithUser(const QString& userId);  // New method to find room by user
-    Room* createRoom(const QString& name);
+    Room* getRoomWithUser(const QString& userId);  // Find room by user
+    Room* createRoom(const QString& otherUserId);  // Create room with a user
     void removeRoom(const QString& roomId);
     QVector<Room*> getAllRooms() const;
+    
+    // Direct room object management (for memory-based approach)
+    void addRoom(Room* room);  // Add an existing room object
 
     // File operations
     void saveContacts();

@@ -1,1 +1,5 @@
 ayman@gmail.com|hey loki|2025-05-11T18:46:17|0
+<<<<<<< HEAD
+=======
+loki@gmail.com|hey aymoon|2025-05-14T16:05:07|0
+>>>>>>> bfd0fc2 (handle the settings)
