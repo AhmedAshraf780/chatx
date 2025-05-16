@@ -1,0 +1,20 @@
+private slots:
+    void filterUsers();
+    void handleUserSelected(int row);
+    void updateChatArea(int index);
+    void sendMessage();
+    void addToContacts(int userId);
+    void showMessageOptions(QWidget *bubble);
+    void showUserOptions(int userIndex);
+    void removeUserFromContacts(int userIndex);
+    void blockUser(int userIndex);
+    void saveUserSettings();
+    void changePassword();
+    void deleteUserAccount();
+    void refreshOnlineStatus();
+    void forceRefreshOnlineStatus();
+    void onlineStatusChanged(int state);
+    void updateUserStatus(const QString &userId, bool isOnline);
+    void updateProfileAvatar();
+    void changeAvatar();
+    void logout(); 

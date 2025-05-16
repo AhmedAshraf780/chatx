@@ -1,7 +1,7 @@
 #pragma once
 
 #include <QtWidgets/QMainWindow>
-#include "../build/ui_forgotpass.h"
+#include "ui_forgotpass.h"
 
 class forgot : public QMainWindow
 {

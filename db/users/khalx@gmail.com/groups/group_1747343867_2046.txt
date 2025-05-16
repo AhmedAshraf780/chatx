@@ -1,0 +1,4 @@
+GroupID: group_1747343867_2046
+Name: khalxGroup
+AdminID: loki@gmail.com
+Members: khalx@gmail.com,loki@gmail.com

@@ -1,6 +1,1 @@
-CONTACT:hoss@gmail.com
-CONTACT:loki@gmail.com
-ROOM:hoss@gmail.com_malak@gmail.com|hoss@gmail.com_malak@gmail.com
-ROOM:loki@gmail.com_malak@gmail.com|loki@gmail.com_malak@gmail.com
-NICKNAME:malak
-BIO:malak was here
+CONTACT:alaa@gmail.com

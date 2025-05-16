@@ -19,13 +19,25 @@ Chat__Application::Chat__Application(QWidget *parent) : QMainWindow(parent) {
 
   // Handle All Buttons within login 
 
-  // Handle sign up Button when you don't have an account
+  /*
+   * Contributors: Alaa and Malak
+   * Function: Login to Signup Navigation
+   * Description: Handles navigation from login page to signup page.
+   * When the user clicks 'Sign Up' on the login screen, it clears any error
+   * and navigates to the signup page (index 1).
+   */
   connect(log->ui.pushButton, &QPushButton::clicked, this, [=]() {
     log->ui.errorLabel->clear(); // Clear any previous error
     ui.MainWidget->setCurrentIndex(1);
   });
 
-  // Handle Login Validations
+  /*
+   * Contributors: Alaa and Malak
+   * Function: Login Authentication
+   * Description: Validates login credentials and authenticates the user.
+   * Checks input fields, validates email format, and attempts to log in.
+   * If successful, clears the form and navigates to the chat page (index 2).
+   */
   connect(log->ui.pushButton_5, &QPushButton::clicked, this, [=]() {
     QString email = log->ui.lineEdit->text();
     QString pass = log->ui.lineEdit_2->text();
@@ -45,23 +57,34 @@ Chat__Application::Chat__Application(QWidget *parent) : QMainWindow(parent) {
     // Try to login and get client object
     Client* client = server::getInstance()->loginUser(email, pass);
     if (client) {
-        qDebug() << "Login successful for user:" << client->getUsername();
         log->ui.lineEdit->clear();
         log->ui.lineEdit_2->clear();
         log->ui.errorLabel->clear();
         
-        // Initialize chat page with the client's data
+        // Properly initialize the chat page
+        chat->startStatusUpdateTimer(); // Start the status timer
+        
+        // Initialize chat page with the client's data - properly loads user list
+        QApplication::setOverrideCursor(Qt::WaitCursor); // Show loading cursor
         chat->loadUsersFromDatabase();
+        QApplication::restoreOverrideCursor(); // Restore cursor
         
         // Switch to chat page
         ui.MainWidget->setCurrentIndex(2);
+        
+        // Force refresh of online status after a short delay
+        QTimer::singleShot(500, chat, &ChatPage::forceRefreshOnlineStatus);
     } else {
         log->ui.errorLabel->setText("Invalid email or password. Please try again.");
-        qDebug() << "Login failed: Invalid credentials";
     }
   }); 
 
-  // Handle forgot password 
+  /*
+   * Contributors: Alaa and Malak
+   * Function: Forgot Password Navigation
+   * Description: Handles navigation from login to forgot password page.
+   * Clears any error message and navigates to the forgot password screen (index 3).
+   */
   connect(log->ui.pushButton_2, &QPushButton::clicked, this, [=]() {
     log->ui.errorLabel->clear(); // Clear any previous error
     ui.MainWidget->setCurrentIndex(3);
@@ -69,7 +92,13 @@ Chat__Application::Chat__Application(QWidget *parent) : QMainWindow(parent) {
 
   // Handle All Buttons within Signup
 
-  // Handle SignUp Validation and save users Data
+  /*
+   * Contributors: Alaa and Malak
+   * Function: User Registration
+   * Description: Validates signup form and registers a new user.
+   * Performs validation on all fields, creates a new user account,
+   * logs in automatically if successful, and navigates to the chat page (index 2).
+   */
   connect(sign->ui.pushButton, &QPushButton::clicked, this, [=]() {
     QString username = sign->ui.lineEdit->text();
     QString email = sign->ui.lineEdit_2->text();
@@ -103,15 +132,18 @@ Chat__Application::Chat__Application(QWidget *parent) : QMainWindow(parent) {
     
     QString errorMessage;
     if (server::getInstance()->registerUser(username, email, password, confirmPassword, errorMessage)) {
-        qDebug() << "Signup successful";
         
         // Create client object for new user
         Client* newClient = server::getInstance()->loginUser(email, password);
         if (newClient) {
-            qDebug() << "Created client for new user:" << newClient->getUsername();
+            
+            // Properly initialize the chat page
+            chat->startStatusUpdateTimer(); // Start the status timer
             
             // Initialize chat page with the new client's data
+            QApplication::setOverrideCursor(Qt::WaitCursor); // Show loading cursor
             chat->loadUsersFromDatabase();
+            QApplication::restoreOverrideCursor(); // Restore cursor
             
             // Clear form and switch to chat page
             sign->ui.lineEdit->clear();
@@ -119,24 +151,39 @@ Chat__Application::Chat__Application(QWidget *parent) : QMainWindow(parent) {
             sign->ui.lineEdit_3->clear();
             sign->ui.lineEdit_4->clear();
             sign->ui.errorLabel->clear();
-            ui.MainWidget->setCurrentIndex(2); // Go directly to chat page
+            
+            // Go directly to chat page
+            ui.MainWidget->setCurrentIndex(2);
+            
+            // Force refresh of online status after a short delay
+            QTimer::singleShot(500, chat, &ChatPage::forceRefreshOnlineStatus);
         } else {
             sign->ui.errorLabel->setText("Error creating user session. Please try logging in.");
             ui.MainWidget->setCurrentIndex(0); // Go back to login page
         }
     } else {
         sign->ui.errorLabel->setText(errorMessage);
-        qDebug() << "Signup failed:" << errorMessage;
     }
   });
 
-  // Handle login button -> back to login immediately
+  /*
+   * Contributors: Alaa and Malak
+   * Function: Signup to Login Navigation
+   * Description: Handles navigation from signup page back to login page.
+   * Clears any error message and returns to the login screen (index 0).
+   */
   connect(sign->ui.pushButton_2, &QPushButton::clicked, this, [=]() {
     sign->ui.errorLabel->clear(); // Clear any previous error
     ui.MainWidget->setCurrentIndex(0);
   });
 
-  // Forgot Password Logic and events
+  /*
+   * Contributors: Alaa and Malak
+   * Function: Password Reset
+   * Description: Implements the forgot password functionality.
+   * Validates input fields, resets the user's password if email exists,
+   * and navigates back to the login page (index 0) on success.
+   */
   connect(fo->ui.pushButton, &QPushButton::clicked, this, [=]() {
     QString email = fo->ui.lineEdit_2->text();
     QString password = fo->ui.lineEdit_3->text();
@@ -169,7 +216,6 @@ Chat__Application::Chat__Application(QWidget *parent) : QMainWindow(parent) {
 
     QString errorMsg;
     if(server::getInstance()->resetPassword(email, password, confirmPass, errorMsg)) {
-        qDebug() << "Reset password successfully";
         fo->ui.lineEdit_2->clear();
         fo->ui.lineEdit_3->clear();
         fo->ui.lineEdit_4->clear();
@@ -177,11 +223,15 @@ Chat__Application::Chat__Application(QWidget *parent) : QMainWindow(parent) {
         ui.MainWidget->setCurrentIndex(0);
     } else {
         fo->ui.errorLabel->setText(errorMsg);
-        qDebug() << "Reset password failed:" << errorMsg;
     }
   });
 
-  // Handle back to login from forgot password
+  /*
+   * Contributors: Alaa and Malak
+   * Function: Forgot Password to Login Navigation
+   * Description: Handles navigation from forgot password page back to login page.
+   * Clears any error message and returns to the login screen (index 0).
+   */
   connect(fo->ui.pushButton_2, &QPushButton::clicked, this, [=]() {
     fo->ui.errorLabel->clear(); // Clear any previous error
     ui.MainWidget->setCurrentIndex(0);
@@ -189,6 +239,15 @@ Chat__Application::Chat__Application(QWidget *parent) : QMainWindow(parent) {
 }
 
 Chat__Application::~Chat__Application() {
-    // Logout and cleanup when application closes
-    server::getInstance()->logoutUser();
+    // Stop timers first
+    ChatPage *chatPage = qobject_cast<ChatPage*>(ui.MainWidget->widget(2));
+    if (chatPage) {
+        chatPage->stopStatusUpdateTimer();
+    }
+    
+    // Use the public shutdown method to properly save data and logout
+    if (server::getInstance()) {
+        server::getInstance()->shutdown();
+    }
+    
 }

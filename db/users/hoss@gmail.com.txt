@@ -1,16 +1,4 @@
-CONTACT:roka
-CONTACT:amed@gmail.com
 CONTACT:loki@gmail.com
-CONTACT:ashraf@gmail.com
-<<<<<<< HEAD
-ROOM:amed@gmail.com_hoss@gmail.com|amed@gmail.com_hoss@gmail.com
-ROOM:ashraf@gmail.com_hoss@gmail.com|ashraf@gmail.com_hoss@gmail.com
 ROOM:hoss@gmail.com_loki@gmail.com|hoss@gmail.com_loki@gmail.com
-=======
-CONTACT:malak@gmail.com
-ROOM:amed@gmail.com_hoss@gmail.com|amed@gmail.com_hoss@gmail.com
-ROOM:ashraf@gmail.com_hoss@gmail.com|ashraf@gmail.com_hoss@gmail.com
-ROOM:hoss@gmail.com_loki@gmail.com|hoss@gmail.com_loki@gmail.com
-ROOM:hoss@gmail.com_malak@gmail.com|hoss@gmail.com_malak@gmail.com
->>>>>>> bfd0fc2 (handle the settings)
-ROOM:hoss@gmail.com_roka@gmail.com|hoss@gmail.com_roka@gmail.com
+NICKNAME:hossam
+BIO:It's okay not to be okay

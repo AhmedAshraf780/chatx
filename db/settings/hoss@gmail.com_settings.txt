@@ -1,3 +1,5 @@
-NICKNAME:agent47
-BIO:hossam was here:)
-ONLINE:false
+NICKNAME:hossam
+BIO:It's okay not to be okay
+ONLINE:true
+LAST_CHANGE:2025-05-15T20:49:42
+AVATAR:../db/avatars/hoss@gmail.com_1747342212.png

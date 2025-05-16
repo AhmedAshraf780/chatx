@@ -1,0 +1,4 @@
+GroupID: group_1747342114_8610
+Name: ProjectDs ( chatx )
+AdminID: loki@gmail.com
+Members: alaa@gmail.com,hoss@gmail.com,malak@gmail.com,qobesy@gmail.com,loki@gmail.com

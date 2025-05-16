@@ -1,7 +1,7 @@
 #pragma once
 
 #include <QtWidgets/QMainWindow>
-#include "../build/ui_signup.h"
+#include "ui_signup.h"
 
 class signup : public QMainWindow
 {

@@ -1,3 +1,5 @@
 NICKNAME:malak
-BIO:malak was here
+BIO:
 ONLINE:true
+LAST_CHANGE:2025-05-15T20:55:36
+AVATAR:../db/avatars/malak@gmail.com_1747342564.png
