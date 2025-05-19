@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QVector>
+#include <QList> // 
 #include <QDateTime>
 #include "message.h"
 
@@ -10,7 +11,7 @@ class Room {
 private:
     QString roomId;
     QString name;
-    QVector<Message> messages;
+    QList<Message> messages;
     QDateTime lastActivity;
 
 public:
@@ -20,14 +21,24 @@ public:
     // Getters
     QString getRoomId() const { return roomId; }
     QString getName() const { return name; }
-    QVector<Message> getMessages() const { return messages; }
+    
+    // Message access methods with List implementation
+    QList<Message> getMessages() const { return messages; } // 
+
+    
+    QVector<Message> getMessagesAsVector() const;
+    
+    // Get the most recent message without removing it
+    Message getLatestMessage() const;
+    
     QDateTime getLastActivity() const { return lastActivity; }
     
     // Setter for roomId (for ensuring consistency)
     void setRoomId(const QString& id) { roomId = id; }
     
-    // Setter for messages (for in-memory approach)
-    void setMessages(const QVector<Message>& msgs) { messages = msgs; }
+    // Message setters
+    void setMessages(const QList<Message>& msgs) { messages = msgs; }
+    void setMessages(const QVector<Message>& msgs);
 
     // Message management
     void addMessage(const Message& msg);
@@ -36,9 +47,6 @@ public:
     void loadMessages();  // Load from file to memory
     void saveMessages();  // Save from memory to file
     void updateLastActivity();
-    
-    // Safely copy messages to prevent assertion errors
-    QVector<Message> safelyCopyMessages() const;
 
     // Static helper method to generate consistent room ID based on usernames without hashing
     static QString generateRoomId(const QString& user1, const QString& user2);

@@ -13,26 +13,8 @@
 #include <QDateTime>
 #include <QDir>
 #include <QSet>
-
-// STL includes
-#include <map>
-#include <queue>
-#include <list>
-#include <deque>
-#include <stack>
-#include <string>
-#include <memory>
-#include <utility>
-
 #include "../client/client.h"
-
-// Define a struct for pending messages
-struct PendingMessage {
-    std::string sender;
-    std::string recipient;
-    std::string content;
-    long long timestamp;
-};
+#include <QList>
 
 struct UserData {
     QString username;
@@ -72,16 +54,11 @@ private:
     QMap<QString, Client*> clients;                       // Email -> Client pointer
     QMap<QString, QVector<QString>> userContacts;         // UserId -> Contact list
     QMap<QString, QMap<QString, Room*>> userRooms;        // UserId -> (RoomId -> Room*)
-    QMap<QString, QVector<Message>> roomMessages;         // RoomId -> Messages
+    QMap<QString, QList<Message>> roomMessages;          // RoomId -> Messages (changed from QStack to QList)
     QVector<StoryData> stories;                           // All stories
-    QMap<QString, QVector<QString>> blockedUsers;         // Add this line for blocked users
+    QMap<QString, QVector<QString>> blockedUsers;           // Add this line for blocked users
     
     Client* currentClient;  // Currently logged in client
-
-    // STL containers (college requirement)
-    std::map<std::string, std::vector<Message>> roomMessagesSTL;         // 1. STL map for message history
-    std::map<std::string, std::queue<PendingMessage>> pendingMessagesQueue; // 2. STL queue for offline messages
-    std::deque<Message> messageHistory;                   // 4. STL deque for efficient message history with pagination
 
     // File loading and saving
     void loadUsersAccounts();
@@ -96,6 +73,8 @@ private:
     void createDefaultSettingsFiles();
     void loadStories();  // Load stories from disk
     void saveStories();  // Save stories to disk
+    void updateRoomReferencesInUserFiles(const QString &oldRoomId, const QString &newRoomId); // Update room references in user files
+    void fixUserContactsFile(const QString &userId); // Fix room references in a user's contact file
 
 public:
     // Destructor
@@ -135,8 +114,18 @@ public:
     QString getUserAvatar(const QString &userId) const;
     
     // Client and contact management
-    bool hasClient(const QString &userId) const { return clients.contains(userId); }
-    Client* getClient(const QString &userId) { return clients.value(userId, nullptr); }
+    Client* getClient(const QString &userId) const { 
+        if (clients.contains(userId)) {
+            return clients[userId]; 
+        }
+        return nullptr;
+    }
+    
+    bool hasClient(const QString &userId) const { 
+        bool exists = clients.contains(userId); 
+        qDebug() << "Checking if client exists - UserID:" << userId << "Result:" << (exists ? "Found" : "Not found");
+        return exists;
+    }
     
     // Contact management
     bool addContactForUser(const QString &userId, const QString &contactId);
@@ -166,19 +155,6 @@ public:
     void updateRoomMessages(const QString &roomId, const QVector<Message> &messages);
     QVector<Message> getRoomMessages(const QString &roomId) const;
 
-    // STL-based methods (college requirement)
-    // 1. Map-based methods
-    void updateRoomMessagesSTL(const std::string &roomId, const std::vector<Message> &messages);
-    std::vector<Message> getRoomMessagesSTL(const std::string &roomId) const;
-    
-    // 2. Queue-based methods
-    bool sendMessageWithQueue(const QString &senderId, const QString &recipientId, const QString &message);
-    void deliverPendingMessages(const QString &userId);
-    
-    // 4. Deque-based methods
-    void addToMessageHistory(const Message &message);
-    std::vector<Message> getMessageHistoryPage(int pageNum, int pageSize) const;
-
     // Application shutdown handler
     void shutdown() {
         // Save current client data and logout
@@ -198,6 +174,16 @@ public:
 
     // Add method to get blocked users
     QVector<QString> getBlockedUsers(const QString &clientId) const;
+
+    // Add new messages to room list (changed from stack)
+    void addMessageToRoom(const QString &roomId, const Message &message);
+    
+    // Convert between QList and QVector for compatibility (changed from QStack)
+    QVector<Message> getMessageVectorFromList(const QString &roomId) const;
+    void setMessageListFromVector(const QString &roomId, const QVector<Message> &messages);
+
+    // Repair methods
+    void repairInconsistentRoomFiles(); // Repair room files that might use nicknames instead of emails
 };
 
 #endif // SERVER_H

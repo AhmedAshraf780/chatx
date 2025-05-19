@@ -1,3 +1,5 @@
-NICKNAME:yousef
-BIO:Welcome to my profile!
-ONLINE:false
+NICKNAME:Yousef 
+BIO:It's okay not to be okay
+ONLINE:true
+LAST_CHANGE:2025-05-18T12:35:49
+AVATAR:../db/avatars/yousef@gmail.com_1747571759.png

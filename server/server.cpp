@@ -5,26 +5,15 @@
 #include <QDir>
 #include <QFile>
 #include <QRegExp>
+#include <QStack>
 #include <QTextStream>
 #include <qglobal.h>
 
 // Initialize static member
 server *server::instance = nullptr;
 
-/*
- * Contributor: Ashraf
- * Function: server constructor
- * Description: Private constructor for the singleton server class.
- * Initializes the server and loads all data from persistent storage.
- */
 server::server() : currentClient(nullptr) { loadAllData(); }
 
-/*
- * Contributor: Ashraf
- * Function: getInstance
- * Description: Implementation of the singleton pattern for the server class.
- * Creates the instance if it doesn't exist and returns the single server instance.
- */
 server *server::getInstance() {
     // Create the instance if it doesn't exist
     if (instance == nullptr) {
@@ -33,15 +22,10 @@ server *server::getInstance() {
     return instance;
 }
 
-/*
- * Contributor: Ashraf
- * Function: loadAllData
- * Description: Loads all application data from persistent storage.
- * Creates necessary directories, loads user accounts, settings, and chat history.
- * Migrates inconsistent room files to standardize the database.
- */
 void server::loadAllData() {
     // Qobesy
+
+    qDebug() << "Loading all data from files...";
 
     // Create necessary directories
     QDir dir;
@@ -95,10 +79,13 @@ void server::loadAllData() {
                             }
                         } else if (line.startsWith("AVATAR:")) {
                             userMap[email].avatarPath = line.mid(7).trimmed();
+                            qDebug() << "Loaded avatar path for user:" << email
+                                     << "-" << userMap[email].avatarPath;
                         }
                     }
 
                     file.close();
+                    qDebug() << "Loaded settings for user:" << email;
                 }
             }
         }
@@ -106,10 +93,14 @@ void server::loadAllData() {
 
     // Migrate any inconsistent room files
     migrateRoomFiles();
+    
+    // Repair any room files that might use nicknames instead of emails
+    repairInconsistentRoomFiles();
 
     // Load room messages
     QDir roomsDir("../db/rooms");
     QStringList roomFiles = roomsDir.entryList(QDir::Files);
+    qDebug() << "Loading" << roomFiles.size() << "room files...";
 
     for (const QString &roomFile : roomFiles) {
         QString roomId = roomFile;
@@ -121,24 +112,27 @@ void server::loadAllData() {
         QFile file(roomsDir.filePath(roomFile));
         if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             QTextStream in(&file);
-            QVector<Message> messages;
+            QList<Message> messageList;
 
             while (!in.atEnd()) {
                 QString line = in.readLine().trimmed();
                 if (!line.isEmpty()) {
                     Message msg = Message::fromString(line);
-                    messages.append(msg);
+                    messageList.append(msg);
                 }
             }
 
             file.close();
-            roomMessages[roomId] = messages;
+            
+            roomMessages[roomId] = messageList;
+            qDebug() << "Loaded" << messageList.size() << "messages for room" << roomId;
         }
     }
 
     // Load user data (contacts, rooms, settings)
     QDir usersDir("../db/users");
     QStringList userFiles = usersDir.entryList(QDir::Files);
+    qDebug() << "Loading" << userFiles.size() << "user files...";
 
     for (const QString &userFile : userFiles) {
         QString userId = userFile;
@@ -149,16 +143,12 @@ void server::loadAllData() {
 
         loadUserContacts(userId);
     }
+
+    qDebug() << "All data loaded successfully.";
 }
 
-/*
- * Contributor: Ashraf
- * Function: saveAllData
- * Description: Persists all application data to storage.
- * Saves user accounts, settings, room messages, and contact information.
- * Creates necessary directories if they don't exist.
- */
 void server::saveAllData() {
+    qDebug() << "Saving all data to files...";
 
     // Create necessary directories
     QDir dir;
@@ -178,9 +168,16 @@ void server::saveAllData() {
             i.next();
             out << i.key() << "," << i.value().username << ","
                 << i.value().password << "\n";
+            qDebug() << "Saved user credentials:" << i.key()
+                     << i.value().username;
         }
         credFile.close();
+        qDebug() << "Total user credentials saved:" << userMap.size();
+    } else {
+        qDebug() << "Failed to save user credentials:"
+                 << credFile.errorString();
     }
+
     // Save user settings - each user gets their own settings file
     QMapIterator<QString, UserData> userIter(userMap);
     while (userIter.hasNext()) {
@@ -204,28 +201,33 @@ void server::saveAllData() {
             }
 
             settingsFile.close();
+            qDebug() << "Saved settings for user:" << email;
         } else {
+            qDebug() << "Failed to save settings for user:" << email;
         }
     }
 
     // Save room messages
-    QMapIterator<QString, QVector<Message>> roomIt(roomMessages);
+    QMapIterator<QString, QList<Message>> roomIt(roomMessages);
     while (roomIt.hasNext()) {
         roomIt.next();
 
         QString roomId = roomIt.key();
-        const QVector<Message> &messages = roomIt.value();
+        const QList<Message> &messages = roomIt.value();
 
         QFile file("../db/rooms/" + roomId + ".txt");
         if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&file);
-
+            
+            // Write messages in chronological order
             for (const Message &msg : messages) {
                 out << msg.toString() << "\n";
             }
 
             file.close();
+            qDebug() << "Saved" << messages.size() << "messages for room" << roomId;
         } else {
+            qDebug() << "Failed to save messages for room" << roomId;
         }
     }
 
@@ -237,13 +239,17 @@ void server::saveAllData() {
         QString userId = userIt.key();
         saveUserContacts(userId);
     }
+
+    qDebug() << "All data saved successfully.";
 }
 
 void server::loadUsersAccounts() {
     QString filePath = "../db/users_credentials/credentials.txt";
     QFile file(filePath);
+    qDebug() << "Loading users from:" << filePath;
 
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qDebug() << "Failed to open file for reading:" << file.errorString();
         return;
     }
 
@@ -265,9 +271,11 @@ void server::loadUsersAccounts() {
             userData.isOnline = false;    // Default offline status
 
             userMap.insert(email, userData);
+            qDebug() << "Loaded user:" << email << username;
         }
     }
     file.close();
+    qDebug() << "Total users loaded:" << userMap.size();
 }
 
 void server::loadUserContacts(const QString &userId) {
@@ -287,6 +295,7 @@ void server::loadUserContacts(const QString &userId) {
             if (line.startsWith("CONTACT:")) {
                 QString contactId = line.mid(8);
                 contacts.append(contactId);
+                qDebug() << "Loaded contact for" << userId << ":" << contactId;
             } else if (line.startsWith("ROOM:")) {
                 QStringList parts = line.mid(5).split('|');
                 if (parts.size() >= 2) {
@@ -297,16 +306,22 @@ void server::loadUserContacts(const QString &userId) {
                     Room *room = new Room(roomName);
                     room->setRoomId(roomId);
                     rooms[roomId] = room;
+
+                    qDebug() << "Loaded room for" << userId << ":" << roomId
+                             << roomName;
                 }
             } else if (line.startsWith("NICKNAME:")) {
                 QString nickname = line.mid(9).trimmed();
                 if (userMap.contains(userId)) {
                     userMap[userId].nickname = nickname;
+                    qDebug()
+                        << "Loaded nickname for" << userId << ":" << nickname;
                 }
             } else if (line.startsWith("BIO:")) {
                 QString bio = line.mid(4).trimmed();
                 if (userMap.contains(userId)) {
                     userMap[userId].bio = bio;
+                    qDebug() << "Loaded bio for" << userId << ":" << bio;
                 }
             }
         }
@@ -330,6 +345,7 @@ void server::loadUserContacts(const QString &userId) {
             QString line = in.readLine().trimmed();
             if (!line.isEmpty()) {
                 blocked.append(line);
+                qDebug() << "Loaded blocked user for" << userId << ":" << line;
             }
         }
 
@@ -376,6 +392,10 @@ void server::saveUserContacts(const QString &userId) {
         }
 
         file.close();
+        qDebug() << "Saved user data for" << userId;
+    } else {
+        qDebug() << "Failed to save user data for" << userId << ":"
+                 << file.errorString();
     }
 }
 
@@ -476,8 +496,10 @@ bool server::registerUser(const QString &username, const QString &email,
         out << "BIO:Welcome to my profile!\n"; // Default bio
         out << "ONLINE:false\n";               // Default to offline
         settingsFile.close();
+        qDebug() << "Created settings file for new user:" << email;
     }
 
+    qDebug() << "Registered new user:" << email << username;
     return true;
 }
 
@@ -525,13 +547,6 @@ QVector<QPair<QString, QString>> server::getAllUsers() const {
     return users;
 }
 
-/*
- * Contributor: Ashraf
- * Function: loginUser
- * Description: Authenticates a user and creates a client object.
- * Loads client data for the authenticated user and sets them as the current client.
- * Returns null if authentication fails.
- */
 Client *server::loginUser(const QString &email, const QString &password) {
     if (!checkUser(email, password)) {
         return nullptr;
@@ -546,22 +561,19 @@ Client *server::loginUser(const QString &email, const QString &password) {
         Client *newClient = new Client(email, userMap[email].username, email);
         clients[email] = newClient;
         loadClientData(newClient);
+        qDebug() << "Created new client with userId/email:" << email
+                 << "and username:" << userMap[email].username;
     }
 
     currentClient = clients[email];
 
     // Preserve the previous online status instead of forcing offline
+    qDebug() << "User" << email << "logged in with status preserved as"
+             << (wasOnline ? "online" : "offline");
 
     return currentClient;
 }
 
-/*
- * Contributor: Ashraf
- * Function: logoutUser
- * Description: Logs out the current user.
- * Saves the client data before logging out to ensure persistence.
- * Clears the current client reference.
- */
 void server::logoutUser() {
     if (currentClient) {
         // Get the user ID before we reset currentClient
@@ -578,6 +590,9 @@ void server::logoutUser() {
 
         // Clear currentClient without changing online status
         currentClient = nullptr;
+
+        qDebug() << "User" << userId << "logged out. Status preserved as"
+                 << (currentStatus ? "online" : "offline");
     }
 }
 
@@ -609,7 +624,7 @@ void server::loadClientData(Client *client) {
 
             // Add messages to room
             if (roomMessages.contains(room->getRoomId())) {
-                const QVector<Message> &messages =
+                const QList<Message> &messages =
                     roomMessages[room->getRoomId()];
                 room->setMessages(messages);
             }
@@ -635,7 +650,7 @@ void server::saveClientData(Client *client) {
         rooms[room->getRoomId()] = room;
 
         // Save room messages
-        const QVector<Message> &messages = room->getMessages();
+        const QList<Message> &messages = room->getMessages();
         roomMessages[room->getRoomId()] = messages;
     }
 
@@ -651,100 +666,52 @@ void server::saveAllClientsData() {
 bool server::deleteUser(const QString &userId) {
     // Check if the user exists in our userMap
     if (!userMap.contains(userId)) {
+        qDebug() << "User" << userId << "not found for deletion";
         return false;
     }
 
-    try {
-        // IMPORTANT: First pre-emptively clear all room files to prevent issues
-        QDir roomsDir("../db/rooms");
-        if (roomsDir.exists()) {
-            QStringList roomFiles = roomsDir.entryList(QDir::Files);
-            for (const QString &roomFile : roomFiles) {
-                // Check if this room involves the user being deleted
-                if (roomFile.contains(userId) && roomFile.endsWith(".txt")) {
-                    QString roomPath = "../db/rooms/" + roomFile;
-                    QFile file(roomPath);
-                    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                        // Write an empty file
-                        file.close();
-                    }
-                }
-            }
+    qDebug() << "Deleting user account:" << userId;
+
+    // Remove from clients map and delete the client object
+    if (clients.contains(userId)) {
+        Client *clientToDelete = clients[userId];
+
+        // If this is the current client, set to null first
+        if (currentClient == clientToDelete) {
+            currentClient = nullptr;
         }
 
-        // Remove from clients map and delete the client object
-        if (clients.contains(userId)) {
-            Client *clientToDelete = clients[userId];
-
-            // If this is the current client, set to null first
-            if (currentClient == clientToDelete) {
-                currentClient = nullptr;
-            }
-
-            // Delete the client object
-            delete clientToDelete;
-            clients.remove(userId);
-        }
-
-        // Remove all user data from in-memory structures
-        userMap.remove(userId);
-        userContacts.remove(userId);
-
-        // Safely remove rooms associated with this user
-        if (userRooms.contains(userId)) {
-            QMap<QString, Room *> &rooms = userRooms[userId];
-
-            // Create a list of room pointers and room IDs to handle separately
-            QList<QPair<QString, Room *>> roomsToDelete;
-            QMapIterator<QString, Room *> roomIter(rooms);
-            while (roomIter.hasNext()) {
-                roomIter.next();
-                roomsToDelete.append(
-                    qMakePair(roomIter.key(), roomIter.value()));
-            }
-
-            // Clear the rooms map first to prevent any further access
-            userRooms[userId].clear();
-
-            // Now safely delete each room
-            for (const QPair<QString, Room *> &roomPair : roomsToDelete) {
-                QString roomId = roomPair.first;
-                Room *room = roomPair.second;
-
-                // Remove messages from our cache
-                roomMessages.remove(roomId);
-
-                // Safely delete the Room object (if not null)
-                if (room) {
-                    try {
-                        // First clear the messages (which should be safer now)
-                        room->clearMessages();
-
-                        // Then delete the room
-                        delete room;
-                    } catch (const std::exception &e) {
-                    }
-                }
-            }
-
-            // Remove the user's rooms map
-            userRooms.remove(userId);
-        }
-
-        // Also remove from blockedUsers
-        if (blockedUsers.contains(userId)) {
-            blockedUsers.remove(userId);
-        }
-
-        return true;
-    } catch (const std::exception &e) {
-        return false;
+        // Delete the client object
+        delete clientToDelete;
+        clients.remove(userId);
     }
+
+    // Remove all user data from in-memory structures
+    userMap.remove(userId);
+    userContacts.remove(userId);
+
+    // Remove rooms associated with this user and their messages
+    if (userRooms.contains(userId)) {
+        QMap<QString, Room *> &rooms = userRooms[userId];
+        QMapIterator<QString, Room *> i(rooms);
+        while (i.hasNext()) {
+            i.next();
+            QString roomId = i.key();
+            delete i.value();            // Delete Room object
+            roomMessages.remove(roomId); // Remove messages
+        }
+
+        userRooms.remove(userId);
+    }
+
+    qDebug() << "User" << userId << "deleted successfully";
+    return true;
 }
 
 bool server::updateUserSettings(const QString &userId, const QString &nickname,
                                 const QString &bio) {
     if (!userMap.contains(userId)) {
+        qDebug() << "User" << userId << "not found for updating settings";
         return false;
     }
 
@@ -771,8 +738,12 @@ bool server::updateUserSettings(const QString &userId, const QString &nickname,
         }
 
         settingsFile.close();
+        qDebug() << "Saved settings for user:" << userId << "with avatar path:"
+                 << (!avatarPath.isEmpty() ? avatarPath : "none");
     }
 
+    qDebug() << "Updated settings for user" << userId
+             << "- Nickname:" << nickname << "Bio:" << bio;
     return true;
 }
 
@@ -785,7 +756,10 @@ bool server::getUserSettings(const QString &userId, QString &nickname,
 
 bool server::getUserSettings(const QString &userId, QString &nickname,
                              QString &bio, QString &avatarPath) {
+    qDebug() << "Getting settings for user ID:" << userId;
+    
     if (!userMap.contains(userId)) {
+        qDebug() << "ERROR: User" << userId << "not found in user map";
         return false;
     }
 
@@ -793,11 +767,17 @@ bool server::getUserSettings(const QString &userId, QString &nickname,
     bio = userMap[userId].bio;
     avatarPath = userMap[userId].avatarPath;
 
+    qDebug() << "Retrieved settings - User:" << userId 
+             << "Nickname:" << nickname 
+             << "Bio:" << (bio.isEmpty() ? "[empty]" : "[set]")
+             << "Avatar:" << (avatarPath.isEmpty() ? "[none]" : avatarPath);
+    
     return true;
 }
 
 bool server::setUserOnlineStatus(const QString &userId, bool isOnline) {
     if (!userMap.contains(userId)) {
+        qDebug() << "User" << userId << "not found for updating online status";
         return false;
     }
 
@@ -808,6 +788,9 @@ bool server::setUserOnlineStatus(const QString &userId, bool isOnline) {
     if (userMap[userId].isOnline != isOnline) {
         userMap[userId].isOnline = isOnline;
         userMap[userId].lastStatusChange = QDateTime::currentDateTime();
+        qDebug() << "Set user" << userId << "online status to"
+                 << (isOnline ? "online" : "offline") << "at"
+                 << userMap[userId].lastStatusChange.toString();
     }
 
     // Immediately save the settings to ensure persistence
@@ -828,6 +811,9 @@ bool server::setUserOnlineStatus(const QString &userId, bool isOnline) {
         }
 
         settingsFile.close();
+        qDebug() << "Saved online status for user:" << userId
+                 << "with avatar path:"
+                 << (!avatarPath.isEmpty() ? avatarPath : "none");
     }
 
     return true;
@@ -855,6 +841,7 @@ server::~server() {
 
 // Migrate inconsistent room files (unchanged)
 void server::migrateRoomFiles() {
+    qDebug() << "Checking for inconsistent room files to migrate...";
 
     // Create rooms directory if it doesn't exist
     QDir dir;
@@ -868,6 +855,7 @@ void server::migrateRoomFiles() {
     QStringList problemFiles;
 
     // First handle nickname vs email conflicts
+    qDebug() << "Looking for nickname vs email conflicts...";
 
     // Group room files by user pairs (ignoring formatting differences)
     QMap<QString, QStringList> userPairToRoomIds;
@@ -895,14 +883,8 @@ void server::migrateRoomFiles() {
         QString user1 = users[0];
         QString user2 = users[1];
 
-        // Normalize to email format
-        if (!user1.contains("@")) {
-            user1 += "@gmail.com";
-        }
-
-        if (!user2.contains("@")) {
-            user2 += "@gmail.com";
-        }
+        // We must use the exact user IDs without any transformation
+        // Email addresses should already be used properly from other fixes
 
         // Create a consistent key regardless of order
         QString userPairKey =
@@ -921,6 +903,8 @@ void server::migrateRoomFiles() {
         i.next();
 
         if (i.value().size() > 1) {
+            qDebug() << "Found conflict for users:" << i.key() << "with"
+                     << i.value().size() << "room files";
 
             // Extract the canonical users from the key
             QStringList canonicalUsers = i.key().split("+");
@@ -931,6 +915,8 @@ void server::migrateRoomFiles() {
             QString correctRoomId =
                 Room::generateRoomId(canonicalUser1, canonicalUser2);
             QString correctPath = "../db/rooms/" + correctRoomId + ".txt";
+
+            qDebug() << "Canonical room ID should be:" << correctRoomId;
 
             // Create the correct file if it doesn't exist
             if (!QFile::exists(correctPath)) {
@@ -944,6 +930,8 @@ void server::migrateRoomFiles() {
                     continue; // Skip if it's the canonical one
 
                 QString roomPath = "../db/rooms/" + roomId + ".txt";
+
+                qDebug() << "Merging" << roomId << "into" << correctRoomId;
 
                 QFile roomFile(roomPath);
                 QFile correctFile(correctPath);
@@ -1010,14 +998,7 @@ void server::migrateRoomFiles() {
                         QString user1 = users[0];
                         QString user2 = users[1];
 
-                        // Normalize user IDs
-                        if (!user1.contains("@")) {
-                            user1 += "@gmail.com";
-                        }
-
-                        if (!user2.contains("@")) {
-                            user2 += "@gmail.com";
-                        }
+                        // Use the exact user IDs without any transformation
 
                         QString correctRoomId =
                             Room::generateRoomId(user1, user2);
@@ -1030,6 +1011,8 @@ void server::migrateRoomFiles() {
                             line =
                                 "ROOM:" + correctRoomId + "|" + correctRoomName;
                             needsUpdate = true;
+                            qDebug() << "Updated room reference:" << roomId
+                                     << "->" << correctRoomId;
                         }
                     }
                 }
@@ -1048,18 +1031,24 @@ void server::migrateRoomFiles() {
                     out << line << "\n";
                 }
                 file.close();
+                qDebug() << "Updated room references in user file:" << userId;
             }
         }
     }
 
     if (!migratedFiles.isEmpty()) {
+        qDebug() << "Migrated" << migratedFiles.size() << "room files:";
         for (const QString &info : migratedFiles) {
+            qDebug() << "  " << info;
         }
     } else {
+        qDebug() << "No room files needed migration.";
     }
 
     if (!problemFiles.isEmpty()) {
+        qDebug() << "Problem files that couldn't be fixed automatically:";
         for (const QString &info : problemFiles) {
+            qDebug() << "  " << info;
         }
     }
 }
@@ -1068,6 +1057,7 @@ void server::migrateRoomFiles() {
 void server::saveUsersAccounts() {
     QString filePath = "../db/users_credentials/credentials.txt";
     QFile file(filePath);
+    qDebug() << "Saving users to:" << filePath;
 
     // Create the directory if it doesn't exist
     QDir dir("../db/users_credentials");
@@ -1076,6 +1066,7 @@ void server::saveUsersAccounts() {
     }
 
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qDebug() << "Failed to open file for writing:" << file.errorString();
         return;
     }
 
@@ -1085,12 +1076,15 @@ void server::saveUsersAccounts() {
         i.next();
         out << i.key() << "," << i.value().username << "," << i.value().password
             << "\n";
+        qDebug() << "Saved user:" << i.key() << i.value().username;
     }
 
     file.close();
+    qDebug() << "Total users saved:" << userMap.size();
 }
 
 void server::createDefaultSettingsFiles() {
+    qDebug() << "Creating default settings files for all users...";
 
     // Create settings directory if it doesn't exist
     QDir dir;
@@ -1127,67 +1121,71 @@ void server::createDefaultSettingsFiles() {
 
                 settingsFile.close();
                 filesCreated++;
+                qDebug() << "Created default settings file for user:" << email;
             } else {
+                qDebug() << "Failed to create settings file for user:" << email
+                         << ":" << settingsFile.errorString();
             }
         }
     }
+
+    qDebug() << "Created" << filesCreated << "default settings files.";
 }
 
-/*
- * Contributor: Ashraf
- * Function: updateRoomMessages
- * Description: Updates the messages for a specific room in the server.
- * Stores messages in both the Qt collection and the STL-based map for compatibility.
- * Also adds messages to the global history deque for pagination.
- */
+// Update the updateRoomMessages method to use QList
 void server::updateRoomMessages(const QString &roomId,
                                 const QVector<Message> &messages) {
-    roomMessages[roomId] = messages;
-    
-    // Also update the STL version
-    std::string roomIdStr = roomId.toStdString();
-    std::vector<Message> messagesVec(messages.begin(), messages.end());
-    roomMessagesSTL[roomIdStr] = messagesVec;
-    
-    // Add messages to the global history deque
-    for (const Message &msg : messages) {
-        addToMessageHistory(msg);
-    }
+    // Convert QVector to QList
+    setMessageListFromVector(roomId, messages);
+    qDebug() << "Updated in-memory messages for room:" << roomId << "with"
+             << messages.size() << "messages";
 }
 
-/*
- * Contributor: Ashraf
- * Function: updateRoomMessagesSTL
- * Description: STL-based version of updateRoomMessages using std::map.
- * Required for the college project to demonstrate STL containers.
- * Keeps both Qt and STL versions synchronized.
- */
-void server::updateRoomMessagesSTL(const std::string &roomId, const std::vector<Message> &messages) {
-    // Store in the STL map
-    roomMessagesSTL[roomId] = messages;
-    
-    // Also update the QMap version for compatibility
-    QString qRoomId = QString::fromStdString(roomId);
-    QVector<Message> qMessages(messages.begin(), messages.end());
-    roomMessages[qRoomId] = qMessages;
-}
-
-/*
- * Contributor: Ashraf
- * Function: getRoomMessages
- * Description: Retrieves messages for a specific room.
- * Returns an empty vector if the room doesn't exist or has no messages.
- */
+// Update the getRoomMessages method to convert from QList to QVector
 QVector<Message> server::getRoomMessages(const QString &roomId) const {
-    if (roomMessages.contains(roomId)) {
-        return roomMessages[roomId];
+    return getMessageVectorFromList(roomId);
+}
+
+// New methods for QList implementation
+
+// Add a message to a room's message list
+void server::addMessageToRoom(const QString &roomId, const Message &message) {
+    roomMessages[roomId].append(message);
+    qDebug() << "Added new message to room:" << roomId;
+}
+
+// Convert a message list to a vector (for compatibility with existing code)
+QVector<Message> server::getMessageVectorFromList(const QString &roomId) const {
+    if (!roomMessages.contains(roomId)) {
+        return QVector<Message>();
     }
-    return QVector<Message>();
+    
+    QVector<Message> messageVector;
+    
+    // Copy messages from list to vector (already in chronological order)
+    for (const Message &msg : roomMessages[roomId]) {
+        messageVector.append(msg);
+    }
+    
+    return messageVector;
+}
+
+// Set a room's message list from a vector
+void server::setMessageListFromVector(const QString &roomId, const QVector<Message> &messages) {
+    QList<Message> messageList;
+    
+    // Add messages to list (already in chronological order)
+    for (const Message &msg : messages) {
+        messageList.append(msg);
+    }
+    
+    roomMessages[roomId] = messageList;
 }
 
 bool server::addContactForUser(const QString &userId,
                                const QString &contactId) {
     if (!userMap.contains(userId)) {
+        qDebug() << "User" << userId << "not found for adding contact";
         return false;
     }
 
@@ -1202,6 +1200,7 @@ bool server::addContactForUser(const QString &userId,
 
         // Save to disk immediately
         saveUserContacts(userId);
+        qDebug() << "Added contact" << contactId << "for user" << userId;
         return true;
     }
 
@@ -1219,6 +1218,8 @@ bool server::hasContactForUser(const QString &userId,
 
 bool server::addRoomToUser(const QString &userId, Room *room) {
     if (!userMap.contains(userId) || !room) {
+        qDebug() << "User" << userId
+                 << "not found or invalid room for adding room";
         return false;
     }
 
@@ -1237,6 +1238,7 @@ bool server::addRoomToUser(const QString &userId, Room *room) {
 
         // Save to disk immediately
         saveUserContacts(userId);
+        qDebug() << "Added room" << roomId << "for user" << userId;
         return true;
     }
 
@@ -1244,16 +1246,25 @@ bool server::addRoomToUser(const QString &userId, Room *room) {
 }
 
 bool server::hasRoomForUser(const QString &userId, const QString &roomId) {
+    qDebug() << "Checking if user" << userId << "has room" << roomId;
+    
+    // First make sure the user exists in our data structure
     if (!userRooms.contains(userId)) {
+        qDebug() << "User" << userId << "not found in userRooms map";
         return false;
     }
-
-    return userRooms[userId].contains(roomId);
+    
+    // Check if the room exists for this user
+    bool hasRoom = userRooms[userId].contains(roomId);
+    qDebug() << "Result:" << (hasRoom ? "Room found" : "Room not found");
+    
+    return hasRoom;
 }
 
 bool server::updateUserAvatar(const QString &userId,
                               const QString &avatarPath) {
     if (!userMap.contains(userId)) {
+        qDebug() << "User" << userId << "not found for updating avatar";
         return false;
     }
 
@@ -1272,6 +1283,8 @@ bool server::updateUserAvatar(const QString &userId,
         out << "AVATAR:" << avatarPath << "\n"; // Add avatar path to settings
 
         settingsFile.close();
+        qDebug() << "Saved avatar path for user:" << userId
+                 << " - Path:" << avatarPath;
     }
 
     return true;
@@ -1279,6 +1292,7 @@ bool server::updateUserAvatar(const QString &userId,
 
 QString server::getUserAvatar(const QString &userId) const {
     if (!userMap.contains(userId)) {
+        qDebug() << "User" << userId << "not found for getting avatar";
         return QString();
     }
 
@@ -1293,12 +1307,14 @@ bool server::changePassword(const QString &userId,
     // Check if user exists
     if (!userMap.contains(userId)) {
         errorMessage = "User not found. Please try again.";
+        qDebug() << "User" << userId << "not found for changing password";
         return false;
     }
 
     // Verify current password
     if (userMap[userId].password != currentPassword) {
         errorMessage = "Current password is incorrect. Please try again.";
+        qDebug() << "Incorrect current password for user" << userId;
         return false;
     }
 
@@ -1321,11 +1337,13 @@ bool server::changePassword(const QString &userId,
     // Save to credentials file immediately
     saveUsersAccounts();
 
+    qDebug() << "Password changed successfully for user" << userId;
     return true;
 }
 
 // Story-related methods
 void server::loadStories() {
+    qDebug() << "Loading stories from disk...";
 
     // Create stories directory if it doesn't exist
     QDir dir;
@@ -1408,17 +1426,23 @@ void server::loadStories() {
 
                 if (now < expirationTime) {
                     stories.append(story);
+                    qDebug()
+                        << "Loaded story:" << story.id << "by" << story.userId;
                 } else {
                     // Delete expired story files
                     QFile::remove(storiesDir.filePath(storyFile));
                     QFile::remove(story.imagePath);
+                    qDebug() << "Removed expired story:" << story.id;
                 }
             }
         }
     }
+
+    qDebug() << "Loaded" << stories.size() << "stories";
 }
 
 void server::saveStories() {
+    qDebug() << "Saving stories to disk...";
 
     // Create stories directory if it doesn't exist
     QDir dir;
@@ -1455,14 +1479,19 @@ void server::saveStories() {
             }
 
             file.close();
+            qDebug() << "Saved story:" << story.id;
         } else {
+            qDebug() << "Failed to save story:" << story.id;
         }
     }
+
+    qDebug() << "Saved" << stories.size() << "stories";
 }
 
 QString server::addStory(const QString &userId, const QString &imagePath,
                          const QString &caption) {
     if (!userMap.contains(userId)) {
+        qDebug() << "Cannot add story: User" << userId << "not found";
         return QString();
     }
 
@@ -1484,6 +1513,7 @@ QString server::addStory(const QString &userId, const QString &imagePath,
     // Save to disk
     saveStories();
 
+    qDebug() << "Added new story:" << storyId << "by" << userId;
     return storyId;
 }
 
@@ -1503,12 +1533,15 @@ bool server::deleteStory(const QString &storyId) {
             // Delete the image file
             QFile::remove(imagePath);
 
+            qDebug() << "Deleted story:" << storyId;
+
             // Save changes
             saveStories();
             return true;
         }
     }
 
+    qDebug() << "Story not found for deletion:" << storyId;
     return false;
 }
 
@@ -1525,10 +1558,13 @@ bool server::markStoryAsViewed(const QString &storyId,
             // Save changes
             saveStories();
 
+            qDebug() << "Marked story" << storyId << "as viewed by" << viewerId
+                     << "at" << stories[i].viewTimes[viewerId].toString();
             return true;
         }
     }
 
+    qDebug() << "Story not found for marking as viewed:" << storyId;
     return false;
 }
 
@@ -1583,6 +1619,7 @@ void server::cleanupOldStories() {
         } else {
             // Mark for removal but don't delete files yet
             storiesToRemove.insert(story.id);
+            qDebug() << "Marking story for cleanup:" << story.id;
         }
     }
 
@@ -1624,7 +1661,14 @@ void server::cleanupOldStories() {
 
         if (!imagePath.isEmpty()) {
             bool imageDeleted = QFile::remove(imagePath);
+            qDebug() << "Cleaned up expired story:" << storyId
+                     << "- Meta file deleted:" << metaDeleted
+                     << "- Image file deleted:" << imageDeleted
+                     << "- Image path:" << imagePath;
         } else {
+            qDebug() << "Cleaned up expired story:" << storyId
+                     << "- Meta file deleted:" << metaDeleted
+                     << "- Image file not found";
         }
     }
 }
@@ -1661,6 +1705,7 @@ bool server::blockUserForClient(const QString &clientId,
                                 const QString &userToBlock) {
     // Make sure client exists
     if (!userMap.contains(clientId)) {
+        qDebug() << "Cannot block user: Client" << clientId << "not found";
         return false;
     }
 
@@ -1671,11 +1716,14 @@ bool server::blockUserForClient(const QString &clientId,
 
     // Check if already blocked
     if (blockedUsers[clientId].contains(userToBlock)) {
+        qDebug() << "User" << userToBlock << "is already blocked by"
+                 << clientId;
         return true; // Already blocked, so consider it a success
     }
 
     // Add to blocked list
     blockedUsers[clientId].append(userToBlock);
+    qDebug() << "User" << userToBlock << "blocked by" << clientId;
 
     // Save to file
     QString blockedPath = "../db/users/" + clientId + "_blocked.txt";
@@ -1687,7 +1735,9 @@ bool server::blockUserForClient(const QString &clientId,
             out << user << "\n";
         }
         file.close();
+        qDebug() << "Saved blocked users list for" << clientId;
     } else {
+        qDebug() << "Failed to save blocked users for" << clientId;
         // Continue anyway as we've updated the in-memory structure
     }
 
@@ -1695,6 +1745,7 @@ bool server::blockUserForClient(const QString &clientId,
     Client *client = getClient(clientId);
     if (client && client->hasContact(userToBlock)) {
         client->removeContact(userToBlock);
+        qDebug() << "Removed" << userToBlock << "from contacts of" << clientId;
         saveUserContacts(clientId);
     }
 
@@ -1723,21 +1774,26 @@ bool server::unblockUserForClient(const QString &clientId,
                                   const QString &userToUnblock) {
     // Make sure client exists
     if (!userMap.contains(clientId)) {
+        qDebug() << "Cannot unblock user: Client" << clientId << "not found";
         return false;
     }
 
     // Check if we have a blocked users list for this client
     if (!blockedUsers.contains(clientId)) {
+        qDebug() << "User" << userToUnblock << "is not blocked by" << clientId
+                 << "(no blocked users list)";
         return true; // No blocked users list means nothing to unblock
     }
 
     // Check if user is blocked
     if (!blockedUsers[clientId].contains(userToUnblock)) {
+        qDebug() << "User" << userToUnblock << "is not blocked by" << clientId;
         return true; // Not blocked, so consider it a success
     }
 
     // Remove from blocked list
     blockedUsers[clientId].removeAll(userToUnblock);
+    qDebug() << "User" << userToUnblock << "unblocked by" << clientId;
 
     // Save to file
     QString blockedPath = "../db/users/" + clientId + "_blocked.txt";
@@ -1749,194 +1805,314 @@ bool server::unblockUserForClient(const QString &clientId,
             out << user << "\n";
         }
         file.close();
+        qDebug() << "Saved updated blocked users list for" << clientId;
     } else {
+        qDebug() << "Failed to save blocked users for" << clientId;
         // Continue anyway as we've updated the in-memory structure
     }
 
     return true;
 }
 
-// STL-based method implementations (college requirement)
-
-/*
- * Contributor: Ashraf
- * Function: getRoomMessagesSTL
- * Description: STL-based version of getRoomMessages using std::map.
- * Required for the college project to demonstrate STL container usage.
- * Returns messages for a room as a std::vector instead of QVector.
- */
-std::vector<Message> server::getRoomMessagesSTL(const std::string &roomId) const {
-    auto it = roomMessagesSTL.find(roomId);
-    if (it != roomMessagesSTL.end()) {
-        return it->second;
-    }
-    return std::vector<Message>();
-}
-
-/*
- * Contributor: Ashraf
- * Function: sendMessageWithQueue
- * Description: Uses std::queue to handle offline messaging.
- * Messages sent to offline users are stored in a queue for later delivery.
- * This is part of the college requirement to demonstrate STL containers.
- */
-bool server::sendMessageWithQueue(const QString &senderId, const QString &recipientId, const QString &message) {
-    // Check if recipient is online
-    if (!isUserOnline(recipientId)) {
-        // Queue message for later delivery
-        PendingMessage pending;
-        pending.sender = senderId.toStdString();
-        pending.recipient = recipientId.toStdString();
-        pending.content = message.toStdString();
-        pending.timestamp = QDateTime::currentDateTime().toMSecsSinceEpoch();
-        
-        pendingMessagesQueue[recipientId.toStdString()].push(pending);
-        return true;
-    }
+void server::repairInconsistentRoomFiles() {
+    qDebug() << "\n======== REPAIRING INCONSISTENT ROOM FILES ========";
     
-    // If online, send immediately
-    // Get the room for these users
-    Client *senderClient = getClient(senderId);
-    if (!senderClient) return false;
-    
-    Room *room = senderClient->getRoomWithUser(recipientId);
-    if (!room) {
-        // Create a new room if it doesn't exist
-        // Create a room name using the two user IDs
-        QString roomName = senderId < recipientId ? 
-                          senderId + "_" + recipientId : 
-                          recipientId + "_" + senderId;
-                          
-        room = new Room(roomName);
-        room->setRoomId(Room::generateRoomId(senderId, recipientId));
-        senderClient->addRoom(room);
-        addRoomToUser(senderId, room);
-        
-        // Also add to recipient's rooms
-        Client *recipientClient = getClient(recipientId);
-        if (recipientClient) {
-            recipientClient->addRoom(room);
-            addRoomToUser(recipientId, room);
+    // Load all user emails and their corresponding nicknames
+    QMap<QString, QString> nicknameToEmail;
+    QMapIterator<QString, UserData> it(userMap);
+    while (it.hasNext()) {
+        it.next();
+        QString email = it.key();
+        QString nickname = it.value().nickname;
+        if (!nickname.isEmpty()) {
+            nicknameToEmail[nickname] = email;
+            nicknameToEmail[nickname.toLower()] = email; // Also map lowercase version
+            qDebug() << "Mapped nickname" << nickname << "to email" << email;
         }
     }
     
-    // Add message to room
-    Message msg(message, senderId);
-    QVector<Message> messages = room->getMessages();
-    messages.append(msg);
-    room->setMessages(messages);
+    // STEP 1: Scan and fix any existing room files with nickname-based IDs
+    qDebug() << "Step 1: Scanning disk-based room files...";
+    QDir roomsDir("../db/rooms");
+    QStringList roomFiles = roomsDir.entryList(QDir::Files);
     
-    // Update in server
-    updateRoomMessages(room->getRoomId(), messages);
-    
-    return true;
-}
-
-/*
- * Contributor: Ashraf
- * Function: deliverPendingMessages
- * Description: Delivers queued messages to a user when they come online.
- * Processes the std::queue of pending messages for a user and adds them to appropriate rooms.
- * This is part of the college requirement to demonstrate STL containers.
- */
-void server::deliverPendingMessages(const QString &userId) {
-    std::string userIdStr = userId.toStdString();
-    auto it = pendingMessagesQueue.find(userIdStr);
-    
-    if (it != pendingMessagesQueue.end()) {
-        std::queue<PendingMessage>& queue = it->second;
+    for (const QString &roomFile : roomFiles) {
+        if (!roomFile.endsWith(".txt"))
+            continue;
         
-        while (!queue.empty()) {
-            PendingMessage msg = queue.front();
-            queue.pop();
+        QString roomId = roomFile;
+        roomId.chop(4); // Remove .txt extension
+        
+        QStringList parts = roomId.split("_");
+        if (parts.size() != 2)
+            continue;
+        
+        QString user1 = parts[0];
+        QString user2 = parts[1];
+        
+        bool needsRepair = false;
+        QString repairedUser1 = user1;
+        QString repairedUser2 = user2;
+        
+        // Check if either part is a nickname and needs to be converted to email
+        if (!user1.contains("@") && nicknameToEmail.contains(user1)) {
+            repairedUser1 = nicknameToEmail[user1];
+            needsRepair = true;
+            qDebug() << "Will convert nickname" << user1 << "to email" << repairedUser1;
+        }
+        
+        if (!user2.contains("@") && nicknameToEmail.contains(user2)) {
+            repairedUser2 = nicknameToEmail[user2];
+            needsRepair = true;
+            qDebug() << "Will convert nickname" << user2 << "to email" << repairedUser2;
+        }
+        
+        if (needsRepair) {
+            // Generate the correct room ID using emails
+            QString correctRoomId = Room::generateRoomId(repairedUser1, repairedUser2);
+            QString oldPath = "../db/rooms/" + roomId + ".txt";
+            QString newPath = "../db/rooms/" + correctRoomId + ".txt";
             
-            // Convert back to QString and deliver
-            QString sender = QString::fromStdString(msg.sender);
-            QString content = QString::fromStdString(msg.content);
-            QDateTime timestamp = QDateTime::fromMSecsSinceEpoch(msg.timestamp);
+            qDebug() << "Repairing room file:" << roomId << "->" << correctRoomId;
             
-            // Get the room for these users
-            Client *recipientClient = getClient(userId);
-            if (recipientClient) {
-                Room *room = recipientClient->getRoomWithUser(sender);
-                if (!room) {
-                    // Create a new room if it doesn't exist
-                    // Create a room name using the two user IDs
-                    QString roomName = sender < userId ? 
-                                      sender + "_" + userId : 
-                                      userId + "_" + sender;
-                                      
-                    room = new Room(roomName);
-                    room->setRoomId(Room::generateRoomId(sender, userId));
-                    recipientClient->addRoom(room);
-                    addRoomToUser(userId, room);
+            // Don't overwrite an existing correct file
+            if (QFile::exists(newPath)) {
+                // Merge content instead
+                QFile oldFile(oldPath);
+                QFile newFile(newPath);
+                
+                if (oldFile.open(QIODevice::ReadOnly | QIODevice::Text) &&
+                    newFile.open(QIODevice::Append | QIODevice::Text)) {
                     
-                    // Also add to sender's rooms if they're online
-                    Client *senderClient = getClient(sender);
-                    if (senderClient) {
-                        senderClient->addRoom(room);
-                        addRoomToUser(sender, room);
+                    QTextStream in(&oldFile);
+                    QTextStream out(&newFile);
+                    
+                    // Copy all messages
+                    while (!in.atEnd()) {
+                        QString line = in.readLine();
+                        if (!line.trimmed().isEmpty()) {
+                            out << line << "\n";
+                        }
                     }
+                    
+                    oldFile.close();
+                    newFile.close();
+                    
+                    // Delete the duplicate file
+                    QFile::remove(oldPath);
+                    qDebug() << "Merged and removed old room file:" << roomId;
                 }
+            } else {
+                // Simply rename the file
+                QFile::rename(oldPath, newPath);
+                qDebug() << "Renamed room file:" << roomId << "->" << correctRoomId;
+            }
+            
+            // Now update any user files that reference this room
+            updateRoomReferencesInUserFiles(roomId, correctRoomId);
+        }
+    }
+    
+    // STEP 2: Verify that all expected room combinations exist, create if missing
+    qDebug() << "Step 2: Verifying expected rooms exist...";
+    
+    // Get all user emails
+    QStringList allEmails;
+    QMapIterator<QString, UserData> emailIt(userMap);
+    while (emailIt.hasNext()) {
+        emailIt.next();
+        allEmails.append(emailIt.key());
+    }
+    
+    // Get existing room files
+    QStringList existingRoomFiles;
+    for (const QString &file : roomFiles) {
+        if (file.endsWith(".txt")) {
+            QString roomId = file;
+            roomId.chop(4);
+            existingRoomFiles.append(roomId);
+        }
+    }
+    
+    // For each user with contacts, verify room files exist
+    for (const QString &userId : userContacts.keys()) {
+        const QVector<QString> &contacts = userContacts[userId];
+        
+        for (const QString &contactId : contacts) {
+            QString expectedRoomId = Room::generateRoomId(userId, contactId);
+            QString roomPath = "../db/rooms/" + expectedRoomId + ".txt";
+            
+            // Check if this room file exists
+            if (!QFile::exists(roomPath)) {
+                qDebug() << "Missing room file for contacts:" << userId << "and" << contactId;
+                qDebug() << "Creating room file:" << expectedRoomId;
                 
-                // Add message to room with the original timestamp
-                Message newMsg(content, sender);
-                // Since there's no setTimestamp method, we need to create a new message
-                // and append it directly to the messages vector
-                QVector<Message> messages = room->getMessages();
-                // Create a new message using fromString to set the timestamp
-                QString messageStr = content + "|" + sender + "|" + timestamp.toString(Qt::ISODate) + "|0";
-                Message timestampedMsg = Message::fromString(messageStr);
-                messages.append(timestampedMsg);
-                room->setMessages(messages);
-                
-                // Update in server
-                updateRoomMessages(room->getRoomId(), messages);
+                // Create the empty room file
+                QFile file(roomPath);
+                if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    file.close();
+                    qDebug() << "Created empty room file:" << roomPath;
+                }
             }
         }
     }
-}
-
-/*
- * Contributor: Ashraf
- * Function: addToMessageHistory
- * Description: Adds a message to the global history using std::deque.
- * Using a deque allows efficient addition/removal at both ends.
- * Maintains a maximum history size to prevent unbounded memory growth.
- * This is part of the college requirement to demonstrate STL containers.
- */
-void server::addToMessageHistory(const Message &message) {
-    // Add to the front for most recent messages
-    messageHistory.push_front(message);
     
-    // Keep history to a reasonable size (e.g., 1000 messages)
-    const size_t MAX_HISTORY_SIZE = 1000;
+    // STEP 3: Update all user contact files to use correct room references
+    qDebug() << "Step 3: Updating user contact files...";
+    QDir usersDir("../db/users");
+    QStringList userFiles = usersDir.entryList(QDir::Files);
     
-    while (messageHistory.size() > MAX_HISTORY_SIZE) {
-        messageHistory.pop_back(); // Remove oldest messages
+    for (const QString &userFile : userFiles) {
+        if (!userFile.endsWith(".txt"))
+            continue;
+        
+        QString userId = userFile;
+        userId.chop(4); // Remove .txt extension
+        
+        fixUserContactsFile(userId);
     }
+    
+    qDebug() << "Room repair operation completed\n";
 }
 
-/*
- * Contributor: Ashraf
- * Function: getMessageHistoryPage
- * Description: Retrieves a page of messages from the global history.
- * Supports efficient pagination using std::deque random access.
- * This is part of the college requirement to demonstrate STL containers.
- */
-std::vector<Message> server::getMessageHistoryPage(int pageNum, int pageSize) const {
-    std::vector<Message> result;
+void server::fixUserContactsFile(const QString &userId) {
+    qDebug() << "Fixing user contacts file for:" << userId;
     
-    // Calculate start and end indices
-    int startIdx = pageNum * pageSize;
-    int endIdx = std::min(startIdx + pageSize, static_cast<int>(messageHistory.size()));
+    QString filePath = "../db/users/" + userId + ".txt";
+    QFile file(filePath);
     
-    // Ensure valid range
-    if (startIdx >= 0 && startIdx < static_cast<int>(messageHistory.size())) {
-        for (int i = startIdx; i < endIdx; i++) {
-            result.push_back(messageHistory[i]);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qDebug() << "Could not open file for reading:" << filePath;
+        return;
+    }
+    
+    QStringList lines;
+    QStringList contacts;
+    QMap<QString, QString> roomMap; // roomId -> roomName
+    bool needsUpdate = false;
+    
+    QTextStream in(&file);
+    while (!in.atEnd()) {
+        QString line = in.readLine();
+        
+        if (line.startsWith("CONTACT:")) {
+            QString contactId = line.mid(8).trimmed();
+            contacts.append(contactId);
+            lines.append(line);
+        } else if (line.startsWith("ROOM:")) {
+            QStringList parts = line.mid(5).split('|');
+            if (parts.size() >= 2) {
+                QString roomId = parts[0].trimmed();
+                QString roomName = parts[1].trimmed();
+                
+                // Check if this room needs to be fixed
+                QStringList roomUsers = roomName.split('_');
+                if (roomUsers.size() == 2) {
+                    QString user1 = roomUsers[0];
+                    QString user2 = roomUsers[1];
+                    
+                    // Make sure both parts are valid emails
+                    if (!user1.contains("@") || !user2.contains("@")) {
+                        qDebug() << "Room needs repair:" << roomName;
+                        
+                        // Fix user1 and user2 if they're not emails
+                        // This assumes contacts are using email addresses
+                        if (contacts.contains(user1) && !user1.contains("@")) {
+                            user1 = contacts.filter(QRegExp(".*" + user1 + ".*@.*")).value(0, user1);
+                        }
+                        
+                        if (contacts.contains(user2) && !user2.contains("@")) {
+                            user2 = contacts.filter(QRegExp(".*" + user2 + ".*@.*")).value(0, user2);
+                        }
+                        
+                        QString correctRoomId = Room::generateRoomId(user1, user2);
+                        QString correctRoomName = correctRoomId;
+                        
+                        // Updated line
+                        line = "ROOM:" + correctRoomId + "|" + correctRoomName;
+                        needsUpdate = true;
+                        qDebug() << "Fixed room reference:" << roomId << "->" << correctRoomId;
+                    }
+                }
+            }
+            
+            lines.append(line);
+        } else {
+            lines.append(line);
         }
     }
     
-    return result;
+    file.close();
+    
+    // Write updated content if needed
+    if (needsUpdate) {
+        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&file);
+            for (const QString &line : lines) {
+                out << line << "\n";
+            }
+            file.close();
+            qDebug() << "Updated user contacts file:" << userId;
+        } else {
+            qDebug() << "Could not open file for writing:" << filePath;
+        }
+    }
+}
+
+void server::updateRoomReferencesInUserFiles(const QString &oldRoomId, const QString &newRoomId) {
+    QDir usersDir("../db/users");
+    QStringList userFiles = usersDir.entryList(QDir::Files);
+    
+    for (const QString &userFile : userFiles) {
+        if (!userFile.endsWith(".txt"))
+            continue;
+        
+        QString userId = userFile;
+        userId.chop(4); // Remove .txt extension
+        
+        QString filePath = "../db/users/" + userFile;
+        QFile file(filePath);
+        
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            continue;
+        }
+        
+        QStringList lines;
+        QTextStream in(&file);
+        bool needsUpdate = false;
+        
+        while (!in.atEnd()) {
+            QString line = in.readLine();
+            
+            if (line.startsWith("ROOM:")) {
+                QStringList parts = line.mid(5).split('|');
+                if (parts.size() >= 2) {
+                    QString roomId = parts[0];
+                    QString roomName = parts[1];
+                    
+                    if (roomId == oldRoomId) {
+                        line = "ROOM:" + newRoomId + "|" + newRoomId;
+                        needsUpdate = true;
+                        qDebug() << "Updated room reference in user file" << userId << ":" << oldRoomId << "->" << newRoomId;
+                    }
+                }
+            }
+            
+            lines.append(line);
+        }
+        
+        file.close();
+        
+        if (needsUpdate) {
+            // Write the updated file
+            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                QTextStream out(&file);
+                for (const QString &line : lines) {
+                    out << line << "\n";
+                }
+                file.close();
+                qDebug() << "Updated room references in user file:" << userId;
+            }
+        }
+    }
 }

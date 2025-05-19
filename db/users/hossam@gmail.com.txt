@@ -1,0 +1,5 @@
+CONTACT:ashraf@gmail.com
+CONTACT:malak@gmail.com
+ROOM:ashraf@gmail.com_hossam@gmail.com|ashraf@gmail.com_hossam@gmail.com
+ROOM:hossam@gmail.com_malak@gmail.com|hossam@gmail.com_malak@gmail.com
+NICKNAME:Mido

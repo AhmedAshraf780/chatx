@@ -11,7 +11,6 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QHBoxLayout>
-#include <QIcon>
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -19,7 +18,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QMap>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -28,7 +26,6 @@
 #include <QPalette>
 #include <QPixmap>
 #include <QPointer>
-#include <QProgressDialog>
 #include <QPushButton>
 #include <QRandomGenerator>
 #include <QScrollArea>
@@ -98,22 +95,59 @@ ChatPage::ChatPage(QWidget *parent)
             onlineStatusCheckbox->setChecked(isCurrentlyOnline);
             onlineStatusCheckbox->blockSignals(false);
             userSettings.isOnline = isCurrentlyOnline;
+            qDebug() << "Preserved existing status for user:" << userId
+                     << (isCurrentlyOnline ? "online" : "offline");
         }
     }
 
     // Load users from database
     loadUsersFromDatabase();
+    
+    // Also load groups from database
+    loadGroupsFromDatabase();
 
-    // Show contacts by default and select the first contact
+    // Show contacts by default and try to select the first contact
     updateUsersList();
+    
+    // First try to select a user contact
+    bool userSelected = false;
     if (!userList.isEmpty()) {
         for (int i = 0; i < userList.size(); ++i) {
             if (userList[i].isContact || userList[i].hasMessages) {
                 usersListWidget->setCurrentRow(i);
                 currentUserId = i;
                 updateChatArea(i);
+                userSelected = true;
                 break;
             }
+        }
+    }
+    
+    // If no user contacts, but we have groups, go to groups tab and select the first group
+    if (!userSelected && !groupList.isEmpty()) {
+        qDebug() << "No user contacts found, but there are " << groupList.size() << " groups. Showing groups instead.";
+        
+        // Switch to groups tab
+        for (int j = 0; j < navButtons.size(); j++) {
+            navButtons[j]->setStyleSheet(
+                QString(R"(
+                background-color: %1;
+                border-radius: 12px;
+                color: white;
+                font-size: 18px;
+            )")
+                    .arg(j == 1 ? "#4d6eaa" : "#2e2e3e")); // Highlight Groups button
+        }
+        
+        // Update UI to show groups
+        isInGroupChat = true;
+        updateGroupsList();
+        
+        // Select the first group
+        if (usersListWidget && usersListWidget->count() > 0) {
+            usersListWidget->setCurrentRow(0);
+            currentGroupId = 0;
+            updateGroupChatArea(0);
         }
     }
 
@@ -125,28 +159,6 @@ ChatPage::ChatPage(QWidget *parent)
 
     // Make sure profile avatar is properly initialized
     QTimer::singleShot(500, this, &ChatPage::updateProfileAvatar);
-
-    // In the constructor after creating the navigation panel
-    // Add this after contentStack is initialized
-
-    // Set up various pages in contentStack
-    contentStack->setCurrentIndex(0); // Start with chats view
-
-    // Load initial data
-    loadUsersFromDatabase();
-    loadGroupsFromDatabase();
-
-    // Initialize navigation history with starting state
-    NavigationEntry initialEntry;
-    initialEntry.state = NavigationState::CHATS;
-    initialEntry.identifier = "";
-    navigationHistory.push_back(initialEntry);
-
-    // After loading users in the constructor
-    loadUsersFromDatabase();
-    loadGroupsFromDatabase();
-    updateUsersList();  // Make sure this is called first
-    updateGroupsList(); // This will show both users and groups
 }
 
 ChatPage::~ChatPage() {
@@ -241,47 +253,12 @@ void ChatPage::createNavigationPanel(QHBoxLayout *mainLayout) {
 
     // Navigation buttons
     QStringList navItems = {"Chat", "Stories", "Calls", "Blocked", "Settings"};
+    QStringList navIcons = {"💬", "📷", "🎧", "⚠️", "⚙️"};
 
-    // Create each navigation button with appropriate icon
     for (int i = 0; i < navItems.size(); i++) {
-        QPushButton *navBtn = new QPushButton();
+        QPushButton *navBtn = new QPushButton(navIcons[i]);
         navBtn->setToolTip(navItems[i]);
         navBtn->setFixedSize(50, 50);
-
-        // Set appropriate icon based on the button type
-        if (navItems[i] == "Calls") {
-            // Use the call.svg icon
-            QPixmap pixmap("/home/loki/Ashraf/progZone/projects/chatXGroup/"
-                           "resources/call.svg");
-            if (!pixmap.isNull()) {
-                QIcon icon(pixmap);
-                navBtn->setIcon(icon);
-                navBtn->setIconSize(QSize(30, 30));
-            } else {
-                navBtn->setText("🔊"); // Fallback emoji
-            }
-        } else if (navItems[i] == "Blocked") {
-            // Use the blocked.svg icon
-            QPixmap pixmap("/home/loki/Ashraf/progZone/projects/chatXGroup/"
-                           "resources/blocked.svg");
-            if (!pixmap.isNull()) {
-                QIcon icon(pixmap);
-                navBtn->setIcon(icon);
-                navBtn->setIconSize(QSize(30, 30));
-            } else {
-                navBtn->setText("⚠️"); // Fallback emoji
-            }
-        } else if (navItems[i] == "Chat") {
-            // Use an emoji for Chat
-            navBtn->setText("💬");
-        } else if (navItems[i] == "Stories") {
-            // Use an emoji for Stories
-            navBtn->setText("📷");
-        } else if (navItems[i] == "Settings") {
-            // Use an emoji for Settings
-            navBtn->setText("⚙️");
-        }
-
         navBtn->setStyleSheet(
             QString(R"(
             background-color: %1;
@@ -297,8 +274,8 @@ void ChatPage::createNavigationPanel(QHBoxLayout *mainLayout) {
         navButtons.append(navBtn);
 
         // Connect button signals
-        connect(navBtn, &QPushButton::clicked, [=]() {
-            // Update active state of all buttons
+        connect(navBtn, &QPushButton::clicked, [this, i, navItems]() {
+            // Update button styling
             for (int j = 0; j < navButtons.size(); j++) {
                 navButtons[j]->setStyleSheet(
                     QString(R"(
@@ -306,38 +283,61 @@ void ChatPage::createNavigationPanel(QHBoxLayout *mainLayout) {
                     border-radius: 12px;
                     color: white;
                     font-size: 30px;
-                )") 
+                )")
                         .arg(j == i ? "#4d6eaa" : "#2e2e3e"));
             }
 
-            // Directly handle navigation based on the button index
-            switch (i) {
-                case 0: // Chat view
-                    contentStack->setCurrentIndex(0);
+            // Show appropriate view in stack
+            if (i < contentStack->count()) {
+                contentStack->setCurrentIndex(i);
+
+                // Show usersSidebar only when in Chat view (index 0)
+                if (i == 0) {
                     usersSidebar->show();
-                    loadUsersFromDatabase();
-                    loadGroupsFromDatabase();
-                    updateGroupsList(); // Make sure to call this to show groups
-                    break;
-                case 1: // Stories view
-                    contentStack->setCurrentIndex(1);
+                } else {
                     usersSidebar->hide();
-                    loadStories();
-                    break;
-                case 2: // Calls view - skip for now
-                    break;
-                case 3: // Blocked users view
-                    contentStack->setCurrentIndex(3);
-                    usersSidebar->hide();
+                }
+
+                // If showing settings, refresh the settings UI and ensure
+                // offline status
+                if (i == 4) { // Settings index is now 4 because we added
+                              // Blocked at index 3
+                    loadUserSettings(); // Refresh settings when tab is selected
+
+                    // Refresh the UI but don't change the status
+                    if (onlineStatusCheckbox) {
+                        Client *client =
+                            server::getInstance()->getCurrentClient();
+                        if (client) {
+                            QString userId = client->getUserId();
+
+                            // Get current status from server
+                            bool isCurrentlyOnline =
+                                server::getInstance()->isUserOnline(userId);
+
+                            // Update checkbox to reflect current status
+                            onlineStatusCheckbox->blockSignals(true);
+                            onlineStatusCheckbox->setChecked(isCurrentlyOnline);
+                            onlineStatusCheckbox->blockSignals(false);
+
+                            // Update settings
+                            userSettings.isOnline = isCurrentlyOnline;
+
+                            qDebug()
+                                << "Settings tab loaded - current status:"
+                                << (isCurrentlyOnline ? "online" : "offline");
+
+                            // Force refresh the user list to update online
+                            // status
+                            refreshOnlineStatus();
+                        }
+                    }
+                }
+
+                // If showing blocked users, load the latest blocked users list
+                if (i == 3) { // Blocked index is 3
                     loadBlockedUsersPane();
-                    break;
-                case 4: // Settings view
-                    contentStack->setCurrentIndex(2);
-                    usersSidebar->hide();
-                    loadUserSettings();
-                    break;
-                default:
-                    break;
+                }
             }
         });
     }
@@ -345,21 +345,9 @@ void ChatPage::createNavigationPanel(QHBoxLayout *mainLayout) {
     navLayout->addStretch();
 
     // Add logout button at the bottom
-    QPushButton *logoutBtn = new QPushButton();
+    QPushButton *logoutBtn = new QPushButton("✖️");
     logoutBtn->setToolTip("Logout");
     logoutBtn->setFixedSize(50, 50);
-
-    // Use the logout SVG icon
-    QPixmap logoutPixmap(
-        "/home/loki/Ashraf/progZone/projects/chatXGroup/resources/logout.svg");
-    if (!logoutPixmap.isNull()) {
-        QIcon logoutIcon(logoutPixmap);
-        logoutBtn->setIcon(logoutIcon);
-        logoutBtn->setIconSize(QSize(30, 30));
-    } else {
-        logoutBtn->setText("✖️"); // Fallback emoji
-    }
-
     logoutBtn->setStyleSheet(R"(
         background-color: #E15554;
         border-radius: 12px;
@@ -512,7 +500,7 @@ void ChatPage::createChatArea(QHBoxLayout *mainLayout) {
         border: none;
     )");
 
-    sendButton = new QPushButton("Send");
+    QPushButton *sendButton = new QPushButton("Send");
     sendButton->setStyleSheet(R"(
         background-color: #4e4e9e;
         color: white;
@@ -796,19 +784,6 @@ void ChatPage::createChatArea(QHBoxLayout *mainLayout) {
     connect(onlineStatusCheckbox, &QCheckBox::stateChanged, this,
             &ChatPage::onlineStatusChanged);
 
-    // Delete Account Button
-    QPushButton *deleteAccountButton = new QPushButton("Delete Account");
-    deleteAccountButton->setStyleSheet(R"(
-        background-color: #E15554;
-        color: white;
-        border-radius: 8px;
-        padding: 12px;
-        border: none;
-        font-size: 15px;
-        font-weight: bold;
-    )");
-    deleteAccountButton->setFixedWidth(200);
-
     // Confirm Button
     QPushButton *confirmButton = new QPushButton("Save Changes");
     confirmButton->setStyleSheet(R"(
@@ -839,7 +814,6 @@ void ChatPage::createChatArea(QHBoxLayout *mainLayout) {
 
     // Add buttons in a horizontal layout
     QHBoxLayout *buttonsLayout = new QHBoxLayout();
-    buttonsLayout->addWidget(deleteAccountButton);
     buttonsLayout->addStretch();
     buttonsLayout->addWidget(confirmButton);
     settingsLayout->addLayout(buttonsLayout);
@@ -850,8 +824,6 @@ void ChatPage::createChatArea(QHBoxLayout *mainLayout) {
     // Connect signals to slots
     connect(confirmButton, &QPushButton::clicked, this,
             &ChatPage::saveUserSettings);
-    connect(deleteAccountButton, &QPushButton::clicked, this,
-            &ChatPage::deleteUserAccount);
 
     contentStack->addWidget(settingsView);
 
@@ -868,7 +840,10 @@ void ChatPage::logout() {
     if (client) {
         // Save the current status before logout
         wasOnline = server::getInstance()->isUserOnline(userId);
+        qDebug() << "Before logout, user" << userId << "was"
+                 << (wasOnline ? "online" : "offline");
     }
+
     // Stop the online status timer
     if (onlineStatusTimer) {
         onlineStatusTimer->stop();
@@ -907,7 +882,11 @@ void ChatPage::logout() {
     if (!userId.isEmpty() && wasOnline) {
         // Restore the online status after logout
         server::getInstance()->setUserOnlineStatus(userId, true);
+        qDebug() << "User" << userId
+                 << "status restored to online after logout";
     }
+
+    qDebug() << "Logging out and clearing UI";
 
     // Navigate back to login page (index 0)
     QStackedWidget *mainStack = qobject_cast<QStackedWidget *>(parent());
@@ -917,8 +896,10 @@ void ChatPage::logout() {
 }
 
 void ChatPage::loadUsersFromDatabase() {
+    qDebug() << "Loading users from database...";
     Client *currentClient = server::getInstance()->getCurrentClient();
     if (!currentClient) {
+        qDebug() << "No current client found!";
         return;
     }
 
@@ -963,8 +944,10 @@ void ChatPage::loadUsersFromDatabase() {
     // Get all users from the server
     QVector<QPair<QString, QString>> allUsers =
         server::getInstance()->getAllUsers();
+    qDebug() << "Retrieved users from server:" << allUsers.size();
 
     if (allUsers.isEmpty()) {
+        qDebug() << "WARNING: No users returned from getAllUsers()";
     }
 
     // Get all rooms to identify users with messages
@@ -978,8 +961,9 @@ void ChatPage::loadUsersFromDatabase() {
             if (participant != currentClient->getUserId() &&
                 !participant.isEmpty()) {
                 // Check if this room has any messages
-                if (!room->getMessages().isEmpty()) {
+                if (!room->getMessagesAsVector().isEmpty()) {
                     usersWithMessages.insert(participant);
+                    qDebug() << "User has messages:" << participant;
                 }
             }
         }
@@ -1002,30 +986,50 @@ void ChatPage::loadUsersFromDatabase() {
 
     // Add all users to the list except current user and blocked users
     for (const auto &user : allUsers) {
-        QString email = user.first;
-        QString username = user.second;
+        QString email = user.first;     // This is the email (userId)
+        QString nickname = user.second; // This is the nickname, not username
 
         // Skip current user and blocked users
         if (email == currentClient->getUserId() ||
             blockedUsersSet.contains(email)) {
+            qDebug() << "Skipping user:" << email
+                     << (blockedUsersSet.contains(email) ? "(blocked)"
+                                                         : "(self)");
             continue;
         }
 
+        // Debug the user we're adding
+        qDebug() << "Processing user - Email:" << email << "Nickname:" << nickname;
+
+        // Create a user info entry with properly populated fields
         UserInfo userInfo;
-        userInfo.name = username;
-        userInfo.email = email;
+        userInfo.name = nickname;  // Display name is the nickname
+        userInfo.email = email;    // Email is the consistent identifier
         userInfo.isOnline = srv->isUserOnline(email);
         userInfo.status = userInfo.isOnline ? "Online" : "Offline";
         userInfo.lastMessage = "";
         userInfo.lastSeen = "";
         userInfo.isContact = currentClient->hasContact(email);
-        userInfo.hasMessages = usersWithMessages.contains(email);
+        
+        // Check if we have messages with this user
+        userInfo.hasMessages = false;
+        for (Room *room : allRooms) {
+            QString roomId = room->getRoomId();
+            if (roomId.contains(email) && !room->getMessagesAsVector().isEmpty()) {
+                userInfo.hasMessages = true;
+                usersWithMessages.insert(email);
+                qDebug() << "User has messages - Room ID:" << roomId;
+                break;
+            }
+        }
 
-        // Check if we've had conversations with this user
+        // Add to the appropriate list
         if (userInfo.hasMessages) {
             usersWithMessagesVec.append(userInfo);
+            qDebug() << "Added user with messages:" << nickname << "(" << email << ")";
         } else {
             regularUsers.append(userInfo);
+            qDebug() << "Added regular user:" << nickname << "(" << email << ")";
         }
     }
 
@@ -1039,6 +1043,10 @@ void ChatPage::loadUsersFromDatabase() {
     // Update profile avatar with current user's information
     updateProfileAvatar();
 
+    qDebug() << "Total users loaded:" << userList.size()
+             << "(Pinned: " << usersWithMessagesVec.size()
+             << ", Regular: " << regularUsers.size() << ")";
+
     // Ensure userMessages is initialized for every user
     userMessages.resize(userList.size());
 
@@ -1049,12 +1057,16 @@ void ChatPage::loadUsersFromDatabase() {
     updateUsersList();
 
     // Debug: Check if the list widget has items now
+    qDebug() << "usersListWidget now has" << usersListWidget->count()
+             << "items";
 
     // Start the status timer if it's not already running
     startStatusUpdateTimer();
 }
 
 void ChatPage::updateUsersList() {
+    qDebug() << "Updating users list with " << userList.size() << " users and "
+             << groupList.size() << " groups";
 
     // Block signals during update
     usersListWidget->blockSignals(true);
@@ -1181,8 +1193,11 @@ void ChatPage::updateUsersList() {
         }
     }
 
+    qDebug() << "Added " << countAdded << " items to the list widget";
+
     // If we didn't add any users but have users in our list, add them all
     if (countAdded == 0 && !userList.isEmpty()) {
+        qDebug() << "No users matched filter criteria, showing all users";
 
         for (int i = 0; i < userList.size(); ++i) {
             QListWidgetItem *item = createUserListItem(userList[i], i);
@@ -1204,44 +1219,69 @@ void ChatPage::filterUsers() {
     updateUsersList();
 }
 
-/*
- * Contributor: Hossam
- * Function: handleUserSelected
- * Description: Handles selection of a user or group in the sidebar.
- * Displays the chat area for the selected item.
- */
 void ChatPage::handleUserSelected(int row) {
     QListWidgetItem *item = usersListWidget->item(row);
-    if (!item) return;
-    
-    // Check if this is a group
-    bool isGroup = item->data(Qt::UserRole + 2).toBool();
-    
-    // Check if this is the "Create Group" special item
-    bool isSpecial = item->data(Qt::UserRole + 3).toBool();
-    
-    if (isSpecial) {
-        // Show create group dialog
-        showCreateGroupDialog();
+    if (!item)
         return;
-    }
-    
+
+    bool ok;
+    int index = item->data(Qt::UserRole).toInt(&ok);
+    if (!ok)
+        return;
+
+    // Check if this is a group or user
+    bool isGroup = item->data(Qt::UserRole + 2).toBool();
+
     if (isGroup) {
-        // Get group index
-        int groupIndex = item->data(Qt::UserRole).toInt();
-        
-        // Update the chat area with group info
-        updateGroupChatArea(groupIndex);
+        // Handle group selection
+        if (index < 0 || index >= groupList.size())
+            return;
+
+        // Only update if the selected group changes or we're switching from a
+        // user to a group
+        if (currentGroupId != index || !isInGroupChat) {
+            // Reset user chat
+            currentUserId = -1;
+            isInGroupChat = true;
+            currentGroupId = index;
+
+            // Update chat area for the group
+            updateGroupChatArea(index);
+        }
     } else {
-        // Get user index
-        int userIndex = item->data(Qt::UserRole).toInt();
-        
-        // Update the chat area with user info
-        updateChatArea(userIndex);
+        // Handle user selection
+        if (index < 0 || index >= userList.size())
+            return;
+
+        // Only update if the selected user changes or we're switching from a
+        // group to a user
+        if (currentUserId != index || isInGroupChat) {
+            // Reset group chat
+            currentGroupId = -1;
+            isInGroupChat = false;
+
+            // Get latest bio and status for the selected user
+            server *srv = server::getInstance();
+            if (srv) {
+                QString nickname, bio;
+                if (srv->getUserSettings(userList[index].email, nickname,
+                                         bio)) {
+                    // Update user status
+                    userList[index].isOnline =
+                        srv->isUserOnline(userList[index].email);
+                    userList[index].status =
+                        userList[index].isOnline ? "Online" : "Offline";
+                }
+            }
+
+            currentUserId = index;
+            updateChatArea(index);
+        }
     }
 }
 
 void ChatPage::updateChatArea(int index) {
+    qDebug() << "Updating chat area for user index:" << index;
 
     if (index < 0 || index >= userList.size())
         return;
@@ -1269,6 +1309,11 @@ void ChatPage::updateChatArea(int index) {
         } else {
             // Fallback if settings can't be retrieved
             chatHeader->setText(user.name + " - " + userList[index].status);
+        }
+        
+        // Mark messages as read if the user is viewing this chat and recipient is online
+        if (isOnline) {
+            markMessagesAsRead(index);
         }
     } else {
         // Fallback if server isn't available
@@ -1314,6 +1359,8 @@ void ChatPage::addToContacts(int userId) {
             currentClient->addContact(contactId);
             userList[userId].isContact = true;
             updateUsersList();
+
+            qDebug() << "Added contact with ID:" << contactId;
         }
     }
 }
@@ -1374,7 +1421,10 @@ void ChatPage::sendMessage() {
                 << msgInfo.text << "\n";
             file.close();
 
+            qDebug() << "Saved group message to disk for group:"
+                     << group.groupId;
         } else {
+            qDebug() << "Failed to save group message to file";
         }
 
         // Notify all group members about the new message
@@ -1383,6 +1433,9 @@ void ChatPage::sendMessage() {
                 // Instead of using server->notifyGroupMessage, just log the
                 // notification This would be implemented in a real app with
                 // proper notifications
+                qDebug() << "Group message notification: To:" << memberId
+                         << "Group:" << group.groupId << "From:" << senderId
+                         << "Message:" << messageText;
 
                 // If the member is online, we could queue a message for them
                 // directly For now, this is just a placeholder for the real
@@ -1393,27 +1446,53 @@ void ChatPage::sendMessage() {
         // Update the UI
         updateGroupChatArea(currentGroupId);
     } else {
-        // Sending a direct message to a user
+        // Individual chat message
         if (currentUserId < 0 || currentUserId >= userList.size()) {
             return;
         }
 
+        const UserInfo &user = userList[currentUserId];
+
+        // Add message to ChatPage data structures
+        MessageInfo msgInfo;
+        msgInfo.text = messageText;
+        msgInfo.isFromMe = true;
+        msgInfo.timestamp = QDateTime::currentDateTime();
+        
+        // Add to user messages
+        if (currentUserId >= userMessages.size()) {
+            userMessages.resize(currentUserId + 1);
+        }
+        userMessages[currentUserId].append(msgInfo);
+
+        // Add message to Room data structure (which will persist to disk)
+        QString targetId = user.email.isEmpty() ? user.name : user.email;
+        
+        // Automatically mark the message as read if recipient is online
+        bool recipientOnline = server::getInstance()->isUserOnline(targetId);
+        
+        // Create the message - notice we don't need to manually set read status here
+        // as it's false by default unless recipient is online
         Message msg(messageText, senderId);
+        
+        // Set read status based on recipient's online status
+        if (recipientOnline) {
+            msg.markAsRead();
+            qDebug() << "Message automatically marked as read since recipient is online:" << targetId;
+        }
 
-        // Use email instead of username for consistent room creation
-        QString targetEmail = userList[currentUserId].email;
-
-        // If we have an email, use it. Otherwise fall back to name (for
-        // backward compatibility)
-        QString targetId =
-            targetEmail.isEmpty() ? userList[currentUserId].name : targetEmail;
-
+        // Attempt to get or create the room with proper diagnostics
+        qDebug() << "Attempting to find room with user:" << targetId;
         Room *room = client->getRoomWithUser(targetId);
+        
         if (!room) {
+            qDebug() << "No existing room found, creating new room with user:" << targetId;
             room = client->createRoom(targetId);
+            
             if (!userList[currentUserId].isContact) {
                 userList[currentUserId].isContact = true;
                 client->addContact(targetId);
+                qDebug() << "Added user to contacts:" << targetId;
             }
         }
 
@@ -1422,32 +1501,30 @@ void ChatPage::sendMessage() {
 
         // Save messages to disk immediately
         room->saveMessages();
+        qDebug() << "Saved message to disk for room:" << room->getRoomId();
 
         // Make sure the message is also added to the server's in-memory
         // structure
         server *srv = server::getInstance();
-        QVector<Message> roomMsgs = room->getMessages();
+        QVector<Message> roomMsgs = room->getMessagesAsVector();
         srv->updateRoomMessages(room->getRoomId(), roomMsgs);
 
-        // IMPORTANT: Add the room to the recipient's rooms in the server's
-        // in-memory structure
-        QString roomId = room->getRoomId();
-
-        // First, check if a Client object exists for the recipient
-        if (!srv->hasClient(targetId)) {
-            // The target user isn't logged in, so add the room to their data
-            // manually
-
-            // 1. Make sure the contact list contains the sender
+        // Check if the target user is logged in
+        if (srv->hasClient(targetId)) {
+            Client *targetClient = srv->getClient(targetId);
+            // If the target user is logged in, check if they need to be added as a contact
+            if (!srv->hasContactForUser(targetId, senderId)) {
             srv->addContactForUser(targetId, senderId);
+                qDebug() << "Added" << senderId << "as contact for user" << targetId;
+            }
 
-            // 2. Make sure the room exists in the recipient's rooms
-            if (!srv->hasRoomForUser(targetId, roomId)) {
-                // Create a copy of the room for the recipient
+            // Check if the room needs to be created for the recipient
+            if (!srv->hasRoomForUser(targetId, room->getRoomId())) {
                 Room *recipientRoom = new Room(room->getName());
+                recipientRoom->setRoomId(room->getRoomId());
                 recipientRoom->setMessages(roomMsgs);
                 srv->addRoomToUser(targetId, recipientRoom);
-            }
+                qDebug() << "Added room to user" << targetId;
         } else {
             // The target user is logged in, so update their Client object
             Client *targetClient = srv->getClient(targetId);
@@ -1455,14 +1532,23 @@ void ChatPage::sendMessage() {
                 // Add contact if needed
                 if (!targetClient->hasContact(senderId)) {
                     targetClient->addContact(senderId);
+                    qDebug() << "Added" << senderId
+                             << "as contact for logged in user" << targetId;
                 }
 
-                // Add room if needed
-                if (!targetClient->getRoom(roomId)) {
-                    // Create a room with the same data
-                    Room *recipientRoom = new Room(room->getName());
+                // Update their room with the new message
+                    Room *recipientRoom = targetClient->getRoom(room->getRoomId());
+                if (!recipientRoom) {
+                    // Create new room for recipient if it doesn't exist
+                    recipientRoom = new Room(room->getName());
                     recipientRoom->setMessages(roomMsgs);
                     targetClient->addRoom(recipientRoom);
+                    qDebug() << "Added room to logged in user" << targetId;
+                } else {
+                    // Update existing room
+                    recipientRoom->setMessages(roomMsgs);
+                    qDebug() << "Updated room for logged in user" << targetId;
+                    }
                 }
             }
         }
@@ -1503,6 +1589,55 @@ void ChatPage::sendMessage() {
     vScrollBar->setValue(vScrollBar->maximum());
 }
 
+void ChatPage::displayLatestMessage(int userIndex) {
+    if (userIndex < 0 || userIndex >= userList.size()) {
+        qDebug() << "Invalid user index:" << userIndex;
+        return;
+    }
+
+    // Get the user's information
+    UserInfo &user = userList[userIndex];
+    
+    // Get the current client
+    Client *currentClient = server::getInstance()->getCurrentClient();
+    if (!currentClient) {
+        qDebug() << "No current client found";
+        return;
+    }
+    
+    // Get the room between current user and selected user
+    QString roomId = Room::generateRoomId(currentClient->getUserId(), user.email);
+    Room *room = currentClient->getRoom(roomId);
+    
+    if (!room) {
+        qDebug() << "No room found for user:" << user.name;
+        return;
+    }
+    
+    // Using stack's top() method to get the most recent message without traversing all messages
+    if (!room->getMessages().isEmpty()) {
+        Message latestMsg = room->getLatestMessage();
+        
+        QDateTime timestamp = latestMsg.getTimestamp();
+        QString sender = latestMsg.getSender();
+        QString content = latestMsg.getContent();
+        
+        // Create a notification with the latest message
+        QMessageBox msgBox;
+        msgBox.setWindowTitle("Latest Message");
+        msgBox.setText("Most recent message from " + user.name + ":");
+        msgBox.setInformativeText(content + "\n\nSent at: " + timestamp.toString("yyyy-MM-dd hh:mm:ss"));
+        msgBox.setStandardButtons(QMessageBox::Ok);
+        msgBox.setDefaultButton(QMessageBox::Ok);
+        msgBox.exec();
+        
+        qDebug() << "Displayed latest message from" << user.name << ":" << content;
+    } else {
+        QMessageBox::information(this, "No Messages", 
+                                "No messages found in the conversation with " + user.name);
+    }
+}
+
 void ChatPage::addMessageToUI(const QString &text, bool isFromMe,
                               const QDateTime &timestamp) {
     QWidget *bubbleRow = new QWidget();
@@ -1524,6 +1659,51 @@ void ChatPage::addMessageToUI(const QString &text, bool isFromMe,
         "font-size: 10px; color: #666666; margin: 0px 4px;");
     timestampLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
+    // Create read receipts indicator for outgoing messages
+    QLabel *readReceiptLabel = nullptr;
+    bool isRead = false;
+    
+    if (isFromMe && currentUserId >= 0) {
+        // Find the message in the room to check its read status
+        Client *client = server::getInstance()->getCurrentClient();
+        if (client) {
+            QString senderId = client->getUserId();
+            QString recipientId = userList[currentUserId].email;
+            QString roomId = Room::generateRoomId(senderId, recipientId);
+            Room *room = client->getRoom(roomId);
+            
+            if (room) {
+                // Find this message based on timestamp to get its read status
+                QList<Message> messages = room->getMessages();
+                for (const Message &msg : messages) {
+                    if (msg.getTimestamp() == timestamp && msg.getSender() == senderId) {
+                        isRead = msg.getReadStatus();
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Create the read receipt checkmarks
+        readReceiptLabel = new QLabel();
+        readReceiptLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        
+        // Use Unicode checkmarks (✓ and ✓✓) as a simple implementation
+        // In a real app, you might want to use actual images for better styling
+        if (isRead) {
+            // Two blue checkmarks for read
+            readReceiptLabel->setText("✓✓");
+            readReceiptLabel->setStyleSheet("font-size: 12px; color: #4169E1;"); // Royal blue for read
+        } else {
+            // Two gray checkmarks for delivered but not read
+            readReceiptLabel->setText("✓✓");
+            readReceiptLabel->setStyleSheet("font-size: 12px; color: #A0A0A0;"); // Gray for delivered
+        }
+        
+        // Set property for later reference
+        readReceiptLabel->setProperty("isRead", isRead);
+    }
+
     // Create bubble content
     QWidget *bubbleContent = new QWidget();
     QHBoxLayout *contentLayout = new QHBoxLayout(bubbleContent);
@@ -1532,6 +1712,11 @@ void ChatPage::addMessageToUI(const QString &text, bool isFromMe,
 
     contentLayout->addWidget(messageText);
     contentLayout->addWidget(timestampLabel);
+    
+    // Add read receipt indicator if this is an outgoing message
+    if (isFromMe && readReceiptLabel) {
+        contentLayout->addWidget(readReceiptLabel);
+    }
 
     // Modernized bubble styling (Messenger/WhatsApp-like)
     QString bubbleColor =
@@ -1557,6 +1742,7 @@ void ChatPage::addMessageToUI(const QString &text, bool isFromMe,
     bubbleContent->setProperty("isFromMe", isFromMe);
     bubbleContent->setProperty("messageText", text);
     bubbleContent->setProperty("timestamp", timestamp);
+    bubbleContent->setProperty("isRead", isRead);
     bubbleContent->installEventFilter(this);
 
     // Position the bubble
@@ -1632,30 +1818,6 @@ bool ChatPage::eventFilter(QObject *obj, QEvent *event) {
             }
         }
     }
-    
-    // Handle clicks on profile avatar
-    if (obj->objectName() == "profileAvatarContainer" && 
-        event->type() == QEvent::MouseButtonPress) {
-        // Directly show settings page
-        contentStack->setCurrentIndex(2);
-        usersSidebar->hide();
-        loadUserSettings();
-        
-        // Update navigation buttons
-        for (int j = 0; j < navButtons.size(); j++) {
-            navButtons[j]->setStyleSheet(
-                QString(R"(
-                background-color: %1;
-                border-radius: 12px;
-                color: white;
-                font-size: 30px;
-            )") 
-                    .arg(j == 4 ? "#4d6eaa" : "#2e2e3e")); // Highlight Settings button
-        }
-        
-        return true;
-    }
-    
     return QWidget::eventFilter(obj, event);
 }
 
@@ -1706,7 +1868,7 @@ void ChatPage::showMessageOptions(QWidget *bubble) {
                         Room *room = client->getRoomWithUser(targetId);
                         if (room) {
                             // Update the message in the room
-                            QVector<Message> messages = room->getMessages();
+                            QVector<Message> messages = room->getMessagesAsVector();
                             for (int j = 0; j < messages.size(); j++) {
                                 if (messages[j].getTimestamp() == timestamp) {
                                     // We can't modify the message directly, so
@@ -1725,10 +1887,13 @@ void ChatPage::showMessageOptions(QWidget *bubble) {
                             // for both users
                             server *srv = server::getInstance();
                             QString roomId = room->getRoomId();
-                            QVector<Message> updatedMsgs = room->getMessages();
+                            QVector<Message> updatedMsgs = room->getMessagesAsVector();
 
                             // Update messages in server
                             srv->updateRoomMessages(roomId, updatedMsgs);
+
+                            qDebug() << "Saved edited message to disk for room:"
+                                     << room->getRoomId();
                         }
                     }
                 }
@@ -1796,6 +1961,8 @@ QListWidgetItem *ChatPage::createUserListItem(const UserInfo &user, int index) {
                 "border-radius: 22px; border: 2px solid #23233a;");
 
             // Debug print to track avatar loading
+            qDebug() << "Loaded custom avatar for user:" << user.email
+                     << "from path:" << avatarPath;
         } else {
             // Fallback to letter if image can't be loaded
             avatar->setText(user.name.left(1).toUpper());
@@ -1808,6 +1975,9 @@ QListWidgetItem *ChatPage::createUserListItem(const UserInfo &user, int index) {
         border: 2px solid #23233a;
     )")
                                       .arg(gradientColors));
+
+            qDebug() << "Failed to load avatar for user:" << user.email
+                     << "from path:" << avatarPath;
         }
     } else {
         // Use text-based avatar if no custom avatar
@@ -1821,6 +1991,9 @@ QListWidgetItem *ChatPage::createUserListItem(const UserInfo &user, int index) {
             border: 2px solid #23233a;
         )")
                                   .arg(gradientColors));
+
+        qDebug() << "Using text avatar for user:" << user.email
+                 << "(no custom avatar)";
     }
 
     avatarLayout->addWidget(avatar, 0, Qt::AlignCenter);
@@ -1893,86 +2066,29 @@ QListWidgetItem *ChatPage::createUserListItem(const UserInfo &user, int index) {
 
 // Add new method to show user options menu
 void ChatPage::showUserOptions(int userIndex) {
-    if (userIndex < 0 || userIndex >= userList.size()) {
+    if (userIndex < 0 || userIndex >= userList.size())
         return;
-    }
 
-    UserInfo user = userList[userIndex];
-    QMenu *contextMenu = new QMenu(this);
+    const UserInfo &user = userList[userIndex];
 
-    // Add "Add to contacts" option if not a contact already
-    if (!user.isContact) {
-        QAction *addContactAction = new QAction("Add to contacts", this);
+    QMenu *menu = new QMenu(this);
+
+    // Only show Block User option
+    QAction *blockAction = menu->addAction("Block User");
+    connect(blockAction, &QAction::triggered,
+            [this, userIndex]() { blockUser(userIndex); });
+
+    // Add contact option if not a contact
+    if (!userList[userIndex].isContact) {
+        QAction *addContactAction = new QAction("Add to Contacts", this);
         connect(addContactAction, &QAction::triggered, [this, userIndex]() {
             addToContacts(userIndex);
         });
-        contextMenu->addAction(addContactAction);
-    } else {
-        // Add "Remove from contacts" option
-        QAction *removeContactAction = new QAction("Remove from contacts", this);
-        connect(removeContactAction, &QAction::triggered, [this, userIndex]() {
-            // Create confirmation dialog
-            QDialog *confirmDialog = new QDialog(this);
-            confirmDialog->setWindowTitle("Confirm Remove");
-            
-            QVBoxLayout *layout = new QVBoxLayout(confirmDialog);
-            QLabel *label = new QLabel("Are you sure you want to remove " + userList[userIndex].name + " from your contacts?");
-            layout->addWidget(label);
-            
-            QHBoxLayout *buttonLayout = new QHBoxLayout();
-            QPushButton *cancelBtn = new QPushButton("Cancel");
-            QPushButton *confirmBtn = new QPushButton("Remove");
-            confirmBtn->setStyleSheet("background-color: #E15554; color: white;");
-            
-            buttonLayout->addWidget(cancelBtn);
-            buttonLayout->addWidget(confirmBtn);
-            layout->addLayout(buttonLayout);
-            
-            connect(cancelBtn, &QPushButton::clicked, confirmDialog, &QDialog::reject);
-            connect(confirmBtn, &QPushButton::clicked, [this, userIndex, confirmDialog]() {
-                removeUserFromContacts(userIndex);
-                confirmDialog->accept();
-            });
-            
-            // Use dialog stack to manage this dialog
-            openDialog(confirmDialog);
-        });
-        contextMenu->addAction(removeContactAction);
+        menu->addAction(addContactAction);
     }
-
-    // Add "Block user" option
-    QAction *blockUserAction = new QAction("Block user", this);
-    connect(blockUserAction, &QAction::triggered, [this, userIndex]() {
-        // Create confirmation dialog
-        QDialog *confirmDialog = new QDialog(this);
-        confirmDialog->setWindowTitle("Confirm Block");
-        
-        QVBoxLayout *layout = new QVBoxLayout(confirmDialog);
-        QLabel *label = new QLabel("Are you sure you want to block " + userList[userIndex].name + "? They will not be able to message you.");
-        layout->addWidget(label);
-        
-        QHBoxLayout *buttonLayout = new QHBoxLayout();
-        QPushButton *cancelBtn = new QPushButton("Cancel");
-        QPushButton *confirmBtn = new QPushButton("Block");
-        confirmBtn->setStyleSheet("background-color: #E15554; color: white;");
-        
-        buttonLayout->addWidget(cancelBtn);
-        buttonLayout->addWidget(confirmBtn);
-        layout->addLayout(buttonLayout);
-        
-        connect(cancelBtn, &QPushButton::clicked, confirmDialog, &QDialog::reject);
-        connect(confirmBtn, &QPushButton::clicked, [this, userIndex, confirmDialog]() {
-            blockUser(userIndex);
-            confirmDialog->accept();
-        });
-        
-        // Use dialog stack to manage this dialog
-        openDialog(confirmDialog);
-    });
-    contextMenu->addAction(blockUserAction);
-
-    // Show the context menu
-    contextMenu->exec(QCursor::pos());
+    
+    menu->exec(QCursor::pos());
+    delete menu;
 }
 
 // Add new method to remove a user from contacts
@@ -2085,32 +2201,68 @@ void ChatPage::blockUser(int userIndex) {
 }
 
 void ChatPage::loadMessagesForCurrentUser() {
+    qDebug() << "----------------------";
+    qDebug() << "Loading messages for user index:" << currentUserId;
 
-    if (currentUserId < 0 || currentUserId >= userList.size())
+    if (currentUserId < 0 || currentUserId >= userList.size()) {
+        qDebug() << "ERROR: Invalid user index:" << currentUserId;
         return;
+    }
 
     Client *client = server::getInstance()->getCurrentClient();
-    if (!client)
+    if (!client) {
+        qDebug() << "ERROR: No active client found";
         return;
+    }
 
-    // Use email instead of username for consistent room lookup
+    qDebug() << "Current client - UserID:" << client->getUserId() 
+             << "Username:" << client->getUsername()
+             << "Email:" << client->getEmail();
+
+    // Always use email for consistent room lookup
     QString targetEmail = userList[currentUserId].email;
     QString targetName = userList[currentUserId].name;
 
-    // If we have an email, use it. Otherwise fall back to name (for backward
-    // compatibility)
-    QString targetId = targetEmail.isEmpty() ? targetName : targetEmail;
+    // Log the info we're using for debugging
+    qDebug() << "Target user info - Email:" << targetEmail << "Name:" << targetName;
 
+    // Check if this is a full email address
+    bool isFullEmail = targetEmail.contains("@");
+    qDebug() << "Target email contains @ symbol:" << isFullEmail;
+
+    // IMPORTANT: Only use the email as targetId - never use nickname
+    QString targetId;
+    if (targetEmail.isEmpty()) {
+        qDebug() << "ERROR: Target user has empty email, cannot proceed safely.";
+        return;
+    } else {
+        targetId = targetEmail;
+        qDebug() << "Using email for message recipient:" << targetId;
+    }
+    
+    qDebug() << "Loading messages with user ID:" << targetId;
+
+    // Get all rooms from client for debugging
+    QVector<Room*> allRooms = client->getAllRooms();
+    qDebug() << "Available rooms (" << allRooms.size() << "):";
+    for (Room* r : allRooms) {
+        qDebug() << " - Room:" << r->getRoomId() << "Name:" << r->getName();
+    }
+
+    // Try to get room with the target user using email only
+    qDebug() << "Trying to find room for user:" << targetId;
     Room *room = client->getRoomWithUser(targetId);
+    
     if (!room) {
-        // Try with name as fallback
-        if (!targetEmail.isEmpty()) {
-            room = client->getRoomWithUser(targetName);
-        }
+        qDebug() << "ERROR: No room found for user:" << targetId;
+        return;
+    }
 
-        if (!room) {
-            return;
-        }
+    qDebug() << "SUCCESS: Found room with ID:" << room->getRoomId();
+
+    // Ensure userMessages has enough space
+    if (currentUserId >= userMessages.size()) {
+        userMessages.resize(currentUserId + 1);
     }
 
     // Clear existing messages to prevent duplication
@@ -2118,7 +2270,8 @@ void ChatPage::loadMessagesForCurrentUser() {
 
     // Load messages from the room
     room->loadMessages();
-    const QVector<Message> &roomMessages = room->getMessages();
+    const QVector<Message> &roomMessages = room->getMessagesAsVector();
+    qDebug() << "Room has" << roomMessages.size() << "messages";
 
     // Add messages to userMessages, avoiding duplicates
     for (const Message &msg : roomMessages) {
@@ -2141,15 +2294,21 @@ void ChatPage::loadMessagesForCurrentUser() {
             userMessages[currentUserId].append(msgInfo);
         }
     }
+
+    qDebug() << "Loaded" << userMessages[currentUserId].size()
+             << "messages for user" << targetId;
+    qDebug() << "----------------------";
 }
 
 void ChatPage::loadUserSettings() {
     Client *client = server::getInstance()->getCurrentClient();
     if (!client) {
+        qDebug() << "Cannot load settings: No active client";
         return;
     }
 
     QString userId = client->getUserId();
+    qDebug() << "Loading settings for user:" << userId;
 
     // Get settings from server
     QString nickname, bio;
@@ -2225,11 +2384,16 @@ void ChatPage::loadUserSettings() {
 
     // Load blocked users list
     loadBlockedUsers();
+
+    qDebug() << "Settings loaded - Nickname:" << userSettings.nickname
+             << "Bio:" << userSettings.bio
+             << "Online:" << userSettings.isOnline;
 }
 
 void ChatPage::saveUserSettings() {
     Client *client = server::getInstance()->getCurrentClient();
     if (!client) {
+        qDebug() << "Cannot save settings: No active client";
         return;
     }
 
@@ -2268,6 +2432,7 @@ void ChatPage::saveUserSettings() {
         userSettings.isOnline = newOnlineStatus;
 
         QString userId = client->getUserId();
+        qDebug() << "Saving settings for user:" << userId;
 
         // Save settings to server
         bool nicknameBioSuccess = server::getInstance()->updateUserSettings(
@@ -2276,6 +2441,9 @@ void ChatPage::saveUserSettings() {
             userId, userSettings.isOnline);
 
         if (nicknameBioSuccess && onlineSuccess) {
+            qDebug() << "Settings saved - Nickname:" << userSettings.nickname
+                     << "Bio:" << userSettings.bio
+                     << "Online:" << userSettings.isOnline;
 
             // Update profile avatar
             updateProfileAvatar();
@@ -2285,6 +2453,7 @@ void ChatPage::saveUserSettings() {
                 newBio != userSettings.bio) {
                 // Force refresh the UI to show updated bio in chat headers
                 refreshOnlineStatus();
+                qDebug() << "Refreshed UI to show updated bio/nickname";
             }
 
             // Show success message to user
@@ -2352,314 +2521,12 @@ void ChatPage::changePassword() {
     }
 }
 
-void ChatPage::deleteUserAccount() {
-    // Ask for confirmation
-    QMessageBox::StandardButton confirm =
-        QMessageBox::question(this, "Delete Account",
-                              "Are you sure you want to delete your account? "
-                              "This action cannot be undone.",
-                              QMessageBox::Yes | QMessageBox::No);
-
-    if (confirm == QMessageBox::Yes) {
-        server *srv = server::getInstance();
-        Client *client = srv->getCurrentClient();
-        if (!client) {
-            QMessageBox::warning(this, "Error",
-                                 "Cannot delete account: No active user");
-            return;
-        }
-
-        // Store userId before deletion since client will be deleted
-        QString userId = client->getUserId();
-
-        try {
-            // First, clear all UI-related resources
-            if (onlineStatusTimer) {
-                onlineStatusTimer->stop();
-                onlineStatusTimer->deleteLater();
-                onlineStatusTimer = nullptr;
-            }
-
-            // Reset various UI states
-            userList.clear();
-            userMessages.clear();
-            groupList.clear();
-            groupMessages.clear();
-            currentUserId = -1;
-            currentGroupId = -1;
-            isInGroupChat = false;
-
-            // Clear chat area to prevent any UI access during deletion
-            chatHeader->setText("Deleting account...");
-            messageInput->setEnabled(false);
-            sendButton->setEnabled(false);
-            usersListWidget->setEnabled(false);
-
-            // Clear all widgets from chat area
-            QLayoutItem *item;
-            while ((item = messageLayout->takeAt(0)) != nullptr) {
-                if (item->widget()) {
-                    delete item->widget();
-                }
-                delete item;
-            }
-            messageLayout->addStretch();
-
-            // Process all direct chat rooms related to this user
-            QDir roomsDir("../db/rooms");
-            QStringList roomFiles = roomsDir.entryList(QDir::Files);
-
-            // First, empty all room files to prevent crashes during Room object
-            // deletion
-            for (const QString &roomFile : roomFiles) {
-                if (roomFile.contains(userId) && roomFile.endsWith(".txt")) {
-                    QString roomPath = "../db/rooms/" + roomFile;
-
-                    // Create an empty version of the file so any attempts to
-                    // read it won't crash
-                    QFile file(roomPath);
-                    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                        file.close();
-                    }
-                }
-            }
-
-            // Process all group chats this user is part of
-            QDir userGroupsDir("../db/users/" + userId + "/groups");
-            QStringList groupFiles;
-            if (userGroupsDir.exists()) {
-                groupFiles = userGroupsDir.entryList(QDir::Files);
-            }
-
-            // For each group, update the members list to remove this user
-            for (const QString &groupFile : groupFiles) {
-                if (groupFile.endsWith(".txt")) {
-                    QString groupId = groupFile;
-                    groupId.chop(4); // Remove .txt extension
-
-                    // Load group info to update members
-                    QFile file("../db/users/" + userId + "/groups/" +
-                               groupFile);
-                    QString groupAdminId;
-                    QStringList groupMembers;
-                    QString groupName;
-
-                    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                        QTextStream in(&file);
-                        while (!in.atEnd()) {
-                            QString line = in.readLine();
-                            if (line.startsWith("AdminID:")) {
-                                groupAdminId = line.mid(8).trimmed();
-                            } else if (line.startsWith("Members:")) {
-                                QString memberList = line.mid(8).trimmed();
-                                groupMembers = memberList.split(",");
-                            } else if (line.startsWith("Name:")) {
-                                groupName = line.mid(5).trimmed();
-                            }
-                        }
-                        file.close();
-                    }
-
-                    // If this user is the admin, delete the entire group
-                    if (groupAdminId == userId) {
-                        // Remove group directory
-                        QDir groupDir("../db/groups/" + groupId);
-                        if (groupDir.exists()) {
-                            groupDir.removeRecursively();
-                        }
-
-                        // Remove group from all members
-                        for (const QString &memberId : groupMembers) {
-                            if (memberId != userId) {
-                                QFile::remove("../db/users/" + memberId +
-                                              "/groups/" + groupId + ".txt");
-                            }
-                        }
-                    } else {
-                        // Just remove this user from the group members
-                        groupMembers.removeAll(userId);
-
-                        // Update group info for all other members
-                        for (const QString &memberId : groupMembers) {
-                            QFile memberGroupFile("../db/users/" + memberId +
-                                                  "/groups/" + groupId +
-                                                  ".txt");
-                            if (memberGroupFile.open(QIODevice::WriteOnly |
-                                                     QIODevice::Text)) {
-                                QTextStream out(&memberGroupFile);
-                                out << "GroupID: " << groupId << "\n";
-                                out << "Name: " << groupName << "\n";
-                                out << "AdminID: " << groupAdminId << "\n";
-                                out << "Members: ";
-                                for (int i = 0; i < groupMembers.size(); ++i) {
-                                    out << groupMembers[i];
-                                    if (i < groupMembers.size() - 1) {
-                                        out << ",";
-                                    }
-                                }
-                                out << "\n";
-                                memberGroupFile.close();
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Use a progress dialog to show that deletion is in progress
-            QProgressDialog progress("Deleting account...", "Cancel", 0, 100,
-                                     this);
-            progress.setWindowModality(Qt::WindowModal);
-            progress.setValue(30);
-            progress.setCancelButton(nullptr); // No cancel button
-            qApp->processEvents(); // Process events to show the dialog
-
-            // Delete user from server (this handles removing them from
-            // in-memory structures)
-            bool success = srv->deleteUser(userId);
-            progress.setValue(60);
-            qApp->processEvents();
-
-            if (success) {
-                // Clean up additional user resources
-                // Remove user directory and all its contents
-                QDir userDir("../db/users/" + userId);
-                if (userDir.exists()) {
-                    userDir.removeRecursively();
-                }
-
-                // Remove settings file
-                QString settingsFile =
-                    "../db/settings/" + userId + "_settings.txt";
-                QFile::remove(settingsFile);
-
-                // Remove any blocked users file
-                QString blockedFile = "../db/users/" + userId + "_blocked.txt";
-                QFile::remove(blockedFile);
-
-                // Remove avatar if exists
-                QString avatarFile = "../db/avatars/" + userId + ".png";
-                QFile::remove(avatarFile);
-
-                progress.setValue(80);
-                qApp->processEvents();
-
-                // Remove user from all contacts lists of other users
-                QDir allUsersDir("../db/users");
-                QStringList userDirs =
-                    allUsersDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-                for (const QString &otherUser : userDirs) {
-                    QString contactsFile = "../db/users/" + otherUser + ".txt";
-                    QFile file(contactsFile);
-                    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                        // Read the file
-                        QStringList lines;
-                        QTextStream in(&file);
-                        while (!in.atEnd()) {
-                            QString line = in.readLine();
-                            // Skip contact lines referencing the deleted user
-                            if (!line.startsWith("CONTACT:" + userId)) {
-                                lines.append(line);
-                            }
-                        }
-                        file.close();
-
-                        // Write back without the deleted user
-                        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                            QTextStream out(&file);
-                            for (const QString &line : lines) {
-                                out << line << "\n";
-                            }
-                            file.close();
-                        }
-                    }
-                }
-
-                // Clean up private chat rooms - now just delete the files since
-                // we've already emptied them
-                for (const QString &roomFile : roomFiles) {
-                    // Check if room involves the deleted user
-                    if (roomFile.contains(userId) &&
-                        roomFile.endsWith(".txt")) {
-                        QString roomPath = "../db/rooms/" + roomFile;
-                        QFile::remove(roomPath);
-                    }
-                }
-
-                // Remove stories created by this user
-                QDir storiesDir("../db/stories");
-                QStringList storyFiles = storiesDir.entryList(QDir::Files);
-                for (const QString &storyFile : storyFiles) {
-                    if (storyFile.startsWith(userId) &&
-                        (storyFile.endsWith(".meta") ||
-                         storyFile.endsWith(".jpg") ||
-                         storyFile.endsWith(".png"))) {
-                        QString storyPath = "../db/stories/" + storyFile;
-                        QFile::remove(storyPath);
-                    }
-                }
-
-                // Clean up credentials file manually to ensure user is removed
-                QString credentialsPath =
-                    "../db/users_credentials/credentials.txt";
-                QFile credFile(credentialsPath);
-                if (credFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    QStringList lines;
-                    QTextStream in(&credFile);
-                    while (!in.atEnd()) {
-                        QString line = in.readLine();
-                        if (!line.startsWith(userId + ",")) {
-                            lines.append(line);
-                        }
-                    }
-                    credFile.close();
-
-                    if (credFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                        QTextStream out(&credFile);
-                        for (const QString &line : lines) {
-                            out << line << "\n";
-                        }
-                        credFile.close();
-                    }
-                }
-
-                progress.setValue(100);
-                qApp->processEvents();
-
-                QMessageBox::information(
-                    this, "Account Deleted",
-                    "Your account has been deleted successfully.");
-
-                // Use a custom logout approach that doesn't try to restore
-                // status Clear UI without restoring online status
-                chatHeader->setText("Select a user");
-                usersListWidget->clear();
-
-                // Navigate back to login page
-                QStackedWidget *mainStack =
-                    qobject_cast<QStackedWidget *>(parent());
-                if (mainStack) {
-                    mainStack->setCurrentIndex(0);
-                }
-            } else {
-                progress.close();
-                QMessageBox::warning(
-                    this, "Error",
-                    "Failed to delete account. Please try again later.");
-            }
-        } catch (const std::exception &e) {
-            QMessageBox::critical(
-                this, "Error",
-                QString("An error occurred during account deletion: %1")
-                    .arg(e.what()));
-        }
-    }
-}
-
 void ChatPage::onlineStatusChanged(int state) {
     bool isOnline = (state == Qt::Checked);
 
     Client *client = server::getInstance()->getCurrentClient();
     if (!client) {
+        qDebug() << "Cannot update online status: No active client";
         return;
     }
 
@@ -2673,6 +2540,8 @@ void ChatPage::onlineStatusChanged(int state) {
     bool success = server::getInstance()->setUserOnlineStatus(userId, isOnline);
 
     if (success) {
+        qDebug() << "Online status changed to:"
+                 << (isOnline ? "Online" : "Offline") << "for user:" << userId;
 
         // Update profile avatar and status indicator
         updateProfileAvatar();
@@ -2707,6 +2576,7 @@ void ChatPage::onlineStatusChanged(int state) {
             }
         });
     } else {
+        qDebug() << "Failed to update online status";
 
         // Restore cursor
         QApplication::restoreOverrideCursor();
@@ -2807,13 +2677,23 @@ void ChatPage::refreshOnlineStatus() {
                 }
 
                 chatHeader->setText(headerText);
+                
+                // If the user is online and we're looking at their chat, mark messages as read
+                if (isOnline) {
+                    markMessagesAsRead(currentUserId);
+                }
             }
+
+            qDebug() << "Detected online status change for" << userList[i].name
+                     << "to" << (isOnline ? "Online" : "Offline");
         }
     }
 
     // Print diagnostic message if status changed
     if (statusChanged) {
+        qDebug() << "Online status changes detected - updating UI";
     } else {
+        qDebug() << "Status poll - no changes detected";
     }
 
     // Update all list items, completely rebuilding the list
@@ -2834,295 +2714,17 @@ void ChatPage::refreshOnlineStatus() {
             onlineStatusCheckbox->blockSignals(true);
             onlineStatusCheckbox->setChecked(isOnline);
             onlineStatusCheckbox->blockSignals(false);
+            qDebug() << "Updated online status checkbox to"
+                     << (isOnline ? "checked" : "unchecked");
         }
 
         // Update profile avatar and status indicator
         updateProfileAvatar();
     }
-}
-
-void ChatPage::forceRefreshOnlineStatus() {
-    // Force an immediate refresh of online status for all users
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-
-    // Call the refresh method directly
-    refreshOnlineStatus();
-
-    QApplication::restoreOverrideCursor();
-
-    // Give visual feedback in the chat header if a chat is open
-    if (currentUserId >= 0 && currentUserId < userList.size()) {
-        QString originalText = chatHeader->text();
-        chatHeader->setText("Refreshing online status...");
-
-        // Reset the header after a short delay
-        QTimer::singleShot(1000, this, [this, originalText]() {
-            chatHeader->setText(originalText);
-        });
-    }
-}
-
-void ChatPage::startStatusUpdateTimer() {
-    if (onlineStatusTimer) {
-        if (!onlineStatusTimer->isActive()) {
-            onlineStatusTimer->start(3000); // 3 seconds
-        }
-    }
-}
-
-void ChatPage::stopStatusUpdateTimer() {
-    if (onlineStatusTimer) {
-        if (onlineStatusTimer->isActive()) {
-            onlineStatusTimer->stop();
-        }
-    }
-}
-
-void ChatPage::updateProfileAvatar() {
-    if (!profileAvatar)
-        return;
-
-    Client *client = server::getInstance()->getCurrentClient();
-    if (!client)
-        return;
-
-    QString userId = client->getUserId();
-
-    // Always reload the avatar from disk to ensure we get the latest version
-    userSettings.hasCustomAvatar = false; // Force reload
-    loadAvatarImage();
-
-    // If we have a custom avatar, use it
-    if (userSettings.hasCustomAvatar && !userSettings.avatarImage.isNull()) {
-        // Create a circular label with the avatar image
-        int size = profileAvatar->width();
-        QPixmap scaledAvatar = userSettings.avatarImage.scaled(
-            size, size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-
-        // Create a new circular mask
-        QPixmap circularAvatar(scaledAvatar.size());
-        circularAvatar.fill(Qt::transparent);
-
-        QPainter painter(&circularAvatar);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setRenderHint(QPainter::SmoothPixmapTransform);
-
-        QPainterPath path;
-        path.addEllipse(0, 0, scaledAvatar.width(), scaledAvatar.height());
-        painter.setClipPath(path);
-        painter.drawPixmap(0, 0, scaledAvatar);
-        painter.end();
-
-        // Set the avatar image
-        profileAvatar->setPixmap(circularAvatar);
-        profileAvatar->setStyleSheet(
-            "border-radius: 25px; border: 2px solid #23233a;");
-    } else {
-        // Fallback to text-based avatar if no image available
-        QString nickname, bio;
-
-        // Get current user's nickname
-        if (server::getInstance()->getUserSettings(userId, nickname, bio) &&
-            !nickname.isEmpty()) {
-            // Use the first letter of nickname if available
-            profileAvatar->setText(nickname.left(1).toUpper());
-        } else {
-            // Fallback to username
-            profileAvatar->setText(client->getUsername().left(1).toUpper());
-        }
-
-        // Style the text-based avatar
-        QString gradientColors =
-            "stop:0 #4d6eaa, stop:1 #7a5ca3"; // Blue to purple gradient for
-                                              // current user
-        profileAvatar->setStyleSheet(QString(R"(
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, %1);
-            color: white;
-            border-radius: 25px;
-            font-weight: bold;
-            font-size: 22px;
-            border: 2px solid #23233a;
-        )")
-                                         .arg(gradientColors));
-    }
-
-    // Also update the status indicator
-    bool isOnline = server::getInstance()->isUserOnline(userId);
-    if (profileStatusIndicator) {
-        profileStatusIndicator->setStyleSheet(
-            QString(R"(
-            background-color: %1;
-            border-radius: 6px;
-            border: 1px solid #23233a;
-        )")
-                .arg(isOnline
-                         ? "#4CAF50"
-                         : "#9E9E9E")); // Green for online, gray for offline
-    }
-}
-
-bool ChatPage::loadAvatarImage() {
-    Client *client = server::getInstance()->getCurrentClient();
-    if (!client) {
-        return false;
-    }
-
-    QString userId = client->getUserId();
-    QString nickname, bio, avatarPath;
-
-    // Get avatar path from server
-    if (server::getInstance()->getUserSettings(userId, nickname, bio,
-                                               avatarPath) &&
-        !avatarPath.isEmpty()) {
-        // Create a fresh QPixmap instance each time to prevent sharing
-        QPixmap avatar(avatarPath);
-
-        if (!avatar.isNull()) {
-            // Make a deep copy of the pixmap to ensure we have a completely new
-            // instance
-            userSettings.avatarImage = QPixmap(avatar);
-            userSettings.hasCustomAvatar = true;
-            return true;
-        }
-    }
-
-    // If no avatar or loading failed
-    userSettings.hasCustomAvatar = false;
-    userSettings.avatarImage = QPixmap(); // Clear any existing avatar
-    return false;
-}
-
-bool ChatPage::saveAvatarImage(const QPixmap &image) {
-    if (image.isNull()) {
-        return false;
-    }
-
-    Client *client = server::getInstance()->getCurrentClient();
-    if (!client) {
-        return false;
-    }
-
-    QString userId = client->getUserId();
-
-    // Clean up old avatar files for this user
-    QDir avatarsDir("../db/avatars");
-    if (avatarsDir.exists()) {
-        // Get all files matching userId prefix
-        QStringList nameFilters;
-        QStringList oldAvatars = avatarsDir.entryList(nameFilters, QDir::Files);
-
-        // Delete old avatar files
-        for (const QString &oldFile : oldAvatars) {
-            if (avatarsDir.remove(oldFile)) {
-            } else {
-            }
-        }
-    }
-
-    // Create avatars directory if it doesn't exist
-    QDir dir;
-    if (!dir.exists("../db/avatars")) {
-        dir.mkpath("../db/avatars");
-    }
-
-    // Create a unique filename based on userId and timestamp
-    QString avatarFilename =
-        "../db/avatars/" + userId + "_" +
-        QString::number(QDateTime::currentDateTime().toSecsSinceEpoch()) +
-        ".png";
-
-    // Save image to file
-    if (image.save(avatarFilename, "PNG")) {
-        // Update server data with new avatar path
-        if (server::getInstance()->updateUserAvatar(userId, avatarFilename)) {
-            // Update local data
-            userSettings.avatarImage = image;
-            userSettings.hasCustomAvatar = true;
-
-            return true;
-        } else {
-            // Remove the file if server update failed
-            QFile::remove(avatarFilename);
-        }
-    } else {
-    }
-
-    return false;
-}
-
-void ChatPage::changeAvatar() {
-    // Open file dialog to select image
-    QString filePath = QFileDialog::getOpenFileName(
-        this, tr("Select Avatar Image"), QDir::homePath(),
-        tr("Image Files (*.png *.jpg *.jpeg *.bmp)"));
-
-    if (filePath.isEmpty()) {
-        return; // User canceled
-    }
-
-    // Load the selected image
-    QPixmap originalImage(filePath);
-    if (originalImage.isNull()) {
-        QMessageBox::warning(this, tr("Error"),
-                             tr("Failed to load the selected image."));
-        return;
-    }
-
-    // Resize if too large (max 200x200)
-    QPixmap scaledImage;
-    if (originalImage.width() > 200 || originalImage.height() > 200) {
-        scaledImage = originalImage.scaled(200, 200, Qt::KeepAspectRatio,
-                                           Qt::SmoothTransformation);
-    } else {
-        scaledImage = originalImage;
-    }
-
-    // Make the image square with a circular mask
-    int size = qMin(scaledImage.width(), scaledImage.height());
-    QPixmap squareImage(size, size);
-    squareImage.fill(Qt::transparent);
-
-    QPainter painter(&squareImage);
-    painter.setRenderHint(QPainter::Antialiasing);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform);
-
-    // Create circular mask
-    QPainterPath path;
-    path.addEllipse(0, 0, size, size);
-    painter.setClipPath(path);
-
-    // Draw the image centered in the square
-    int x = (size - scaledImage.width()) / 2;
-    int y = (size - scaledImage.height()) / 2;
-    painter.drawPixmap(x, y, scaledImage);
-    painter.end();
-
-    // Save the processed image
-    if (saveAvatarImage(squareImage)) {
-        // Update profile avatar
-        updateProfileAvatar();
-
-        // Update avatar preview in settings
-        if (avatarPreview) {
-            QPixmap previewAvatar = squareImage.scaled(
-                avatarPreview->width(), avatarPreview->height(),
-                Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            avatarPreview->setPixmap(previewAvatar);
-            avatarPreview->setStyleSheet(
-                "border-radius: 50px; border: 2px solid #23233a;");
-        }
-
-        // Force an immediate UI refresh by updating users list
-        QMessageBox::information(this, tr("Success"),
-                                 tr("Avatar has been updated successfully."));
-
-        // Schedule multiple refreshes to ensure all UI elements are updated
-        QTimer::singleShot(100, this, &ChatPage::forceRefreshOnlineStatus);
-        QTimer::singleShot(500, this, &ChatPage::forceRefreshOnlineStatus);
-        QTimer::singleShot(1000, this, &ChatPage::forceRefreshOnlineStatus);
-    } else {
-        QMessageBox::warning(this, tr("Error"),
-                             tr("Failed to save the avatar image."));
+    
+    // Update read receipts in current chat if visible
+    if (contentStack->currentIndex() == 0 && currentUserId >= 0) {
+        updateReadReceipts();
     }
 }
 
@@ -3265,11 +2867,7 @@ void ChatPage::loadStories() {
         info.viewed = server::getInstance()->hasViewedStory(
             storyData.id, client->getUserId());
 
-        // Only add stories from other users or your own unviewed stories 
-        // to prevent clutter
-        if (storyData.userId != client->getUserId() || !info.viewed) {
-            userStories.append(info);
-        }
+        userStories.append(info);
     }
 
     // Update UI
@@ -3481,33 +3079,16 @@ QWidget *ChatPage::createStoryFeedItem(const StoryInfo &story) {
     captionLabel->setStyleSheet("color: white; font-size: 14px;");
 
     // Get viewer count
-    QString storyId =
-        story.userId + "_" + story.timestamp.toString("yyyyMMdd_hhmmss");
-
-    // Get viewers info and exclude creator if viewing their own story
-    QSet<QString> viewers = server::getInstance()->getStoryViewers(storyId);
-    
-    // Check if current user is the story owner
-    Client *client = server::getInstance()->getCurrentClient();
-    bool isStoryOwner = (client && client->getUserId() == story.userId);
-    
-    // Don't count current user in viewers if they are the story creator
-    int viewerCount = viewers.size();
-    if (isStoryOwner && viewers.contains(client->getUserId())) {
-        viewerCount--;
-    }
+    int viewerCount = server::getInstance()->getStoryViewerCount(
+        story.userId + "_" + story.timestamp.toString("yyyyMMdd_hhmmss"));
+    QLabel *viewerCountLabel =
+        new QLabel(QString("👁️ %1 views").arg(viewerCount));
+    viewerCountLabel->setStyleSheet("color: #6e6e8e; font-size: 12px;");
 
     detailsLayout->addWidget(usernameLabel);
     detailsLayout->addWidget(timestampLabel);
     detailsLayout->addWidget(captionLabel);
-    
-    // Only add viewer count label if current user is the story owner
-    if (isStoryOwner) {
-        QLabel *viewerCountLabel =
-            new QLabel(QString("👁️ %1 views").arg(viewerCount));
-        viewerCountLabel->setStyleSheet("color: #6e6e8e; font-size: 12px;");
-        detailsLayout->addWidget(viewerCountLabel);
-    }
+    detailsLayout->addWidget(viewerCountLabel);
 
     // Preview image
     QLabel *previewImage = new QLabel();
@@ -3663,138 +3244,130 @@ void ChatPage::showStoryDialog(const StoryInfo &story) {
         viewers.remove(client->getUserId());
     }
 
-    // Only create and add viewers widget if the current user is the story owner
-    bool isStoryOwner = (client && client->getUserId() == story.userId);
-    
-    // Create viewers widget
-    QWidget *viewersWidget = nullptr;
-    
-    if (isStoryOwner) {
-        // Create viewers section
-        viewersWidget = new QWidget();
-        QVBoxLayout *viewersLayout = new QVBoxLayout(viewersWidget);
-        viewersLayout->setContentsMargins(10, 10, 10, 10);
-        
-        // Viewers header with count
-        QLabel *viewersHeader =
-            new QLabel(QString("👁️ Viewers (%1)").arg(viewers.size()));
-        viewersHeader->setStyleSheet(
-            "color: white; font-size: 16px; font-weight: bold; margin-top: 10px;");
-        viewersLayout->addWidget(viewersHeader);
+    // Create viewers section
+    QWidget *viewersWidget = new QWidget();
+    QVBoxLayout *viewersLayout = new QVBoxLayout(viewersWidget);
+    viewersLayout->setContentsMargins(10, 10, 10, 10);
 
-        // Viewer list with scrollable area
-        QScrollArea *viewersScrollArea = new QScrollArea();
-        viewersScrollArea->setWidgetResizable(true);
-        viewersScrollArea->setMaximumHeight(100);
-        viewersScrollArea->setStyleSheet(
-            "background-color: #23233a; border-radius: 10px; border: none;");
+    // Viewers header with count
+    QLabel *viewersHeader =
+        new QLabel(QString("👁️ Viewers (%1)").arg(viewers.size()));
+    viewersHeader->setStyleSheet(
+        "color: white; font-size: 16px; font-weight: bold; margin-top: 10px;");
+    viewersLayout->addWidget(viewersHeader);
 
-        QWidget *viewersListWidget = new QWidget();
-        QVBoxLayout *viewersListLayout = new QVBoxLayout(viewersListWidget);
-        viewersListLayout->setSpacing(5);
+    // Viewer list with scrollable area
+    QScrollArea *viewersScrollArea = new QScrollArea();
+    viewersScrollArea->setWidgetResizable(true);
+    viewersScrollArea->setMaximumHeight(100);
+    viewersScrollArea->setStyleSheet(
+        "background-color: #23233a; border-radius: 10px; border: none;");
 
-        // Add each viewer to the list
-        QSet<QString>::const_iterator it;
-        for (it = viewers.constBegin(); it != viewers.constEnd(); ++it) {
-            QString viewerId = *it;
+    QWidget *viewersListWidget = new QWidget();
+    QVBoxLayout *viewersListLayout = new QVBoxLayout(viewersListWidget);
+    viewersListLayout->setSpacing(5);
 
-            // Get viewer's nickname
-            QString nickname, bio;
-            if (server::getInstance()->getUserSettings(viewerId, nickname, bio)) {
-                // Create viewer item
-                QWidget *viewerItem = new QWidget();
-                QHBoxLayout *viewerLayout = new QHBoxLayout(viewerItem);
-                viewerLayout->setContentsMargins(5, 5, 5, 5);
+    // Add each viewer to the list
+    QSet<QString>::const_iterator it;
+    for (it = viewers.constBegin(); it != viewers.constEnd(); ++it) {
+        QString viewerId = *it;
 
-                // Viewer avatar or first letter
-                QLabel *viewerAvatar = new QLabel();
-                viewerAvatar->setFixedSize(24, 24);
-                viewerAvatar->setAlignment(Qt::AlignCenter);
+        // Skip current user if they're the story creator
+        if (client && client->getUserId() == story.userId &&
+            viewerId == client->getUserId()) {
+            continue;
+        }
 
-                QString viewerAvatarPath =
-                    server::getInstance()->getUserAvatar(viewerId);
-                if (!viewerAvatarPath.isEmpty() &&
-                    QFile::exists(viewerAvatarPath)) {
-                    QPixmap avatar(viewerAvatarPath);
-                    QPixmap scaledAvatar = avatar.scaled(
-                        viewerAvatar->width(), viewerAvatar->height(),
-                        Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        // Get viewer's nickname
+        QString nickname, bio;
+        if (server::getInstance()->getUserSettings(viewerId, nickname, bio)) {
+            // Create viewer item
+            QWidget *viewerItem = new QWidget();
+            QHBoxLayout *viewerLayout = new QHBoxLayout(viewerItem);
+            viewerLayout->setContentsMargins(5, 5, 5, 5);
 
-                    // Create circular mask
-                    QPixmap circularAvatar(scaledAvatar.size());
-                    circularAvatar.fill(Qt::transparent);
+            // Viewer avatar or first letter
+            QLabel *viewerAvatar = new QLabel();
+            viewerAvatar->setFixedSize(24, 24);
+            viewerAvatar->setAlignment(Qt::AlignCenter);
 
-                    QPainter painter(&circularAvatar);
-                    painter.setRenderHint(QPainter::Antialiasing);
-                    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            QString viewerAvatarPath =
+                server::getInstance()->getUserAvatar(viewerId);
+            if (!viewerAvatarPath.isEmpty() &&
+                QFile::exists(viewerAvatarPath)) {
+                QPixmap avatar(viewerAvatarPath);
+                QPixmap scaledAvatar = avatar.scaled(
+                    viewerAvatar->width(), viewerAvatar->height(),
+                    Qt::KeepAspectRatio, Qt::SmoothTransformation);
 
-                    QPainterPath path;
-                    path.addEllipse(0, 0, scaledAvatar.width(),
-                                    scaledAvatar.height());
-                    painter.setClipPath(path);
-                    painter.drawPixmap(0, 0, scaledAvatar);
+                // Create circular mask
+                QPixmap circularAvatar(scaledAvatar.size());
+                circularAvatar.fill(Qt::transparent);
 
-                    viewerAvatar->setPixmap(circularAvatar);
-                } else {
-                    viewerAvatar->setText(nickname.left(1).toUpper());
-                }
+                QPainter painter(&circularAvatar);
+                painter.setRenderHint(QPainter::Antialiasing);
+                painter.setRenderHint(QPainter::SmoothPixmapTransform);
 
-                viewerAvatar->setStyleSheet(R"(
-                    background-color: #2e2e4e;
-                    border-radius: 12px;
-                    color: white;
-                    font-size: 12px;
-                    font-weight: bold;
-                )");
+                QPainterPath path;
+                path.addEllipse(0, 0, scaledAvatar.width(),
+                                scaledAvatar.height());
+                painter.setClipPath(path);
+                painter.drawPixmap(0, 0, scaledAvatar);
 
-                // Viewer name
-                QLabel *viewerName = new QLabel(nickname);
-                viewerName->setStyleSheet("color: white; font-size: 14px;");
-
-                // Timestamp (if available)
-                QDateTime viewTime =
-                    server::getInstance()->getStoryViewTime(storyId, viewerId);
-                QLabel *viewTimeLabel = new QLabel();
-                if (viewTime.isValid()) {
-                    viewTimeLabel->setText(viewTime.toString("hh:mm"));
-                    viewTimeLabel->setStyleSheet(
-                        "color: #6e6e8e; font-size: 12px;");
-                }
-
-                viewerLayout->addWidget(viewerAvatar);
-                viewerLayout->addWidget(viewerName, 1);
-                viewerLayout->addWidget(viewTimeLabel);
-
-                viewersListLayout->addWidget(viewerItem);
+                viewerAvatar->setPixmap(circularAvatar);
+            } else {
+                viewerAvatar->setText(nickname.left(1).toUpper());
             }
+
+            viewerAvatar->setStyleSheet(R"(
+                background-color: #2e2e4e;
+                border-radius: 12px;
+                color: white;
+                font-size: 12px;
+                font-weight: bold;
+            )");
+
+            // Viewer name
+            QLabel *viewerName = new QLabel(nickname);
+            viewerName->setStyleSheet("color: white; font-size: 14px;");
+
+            // Timestamp (if available)
+            QDateTime viewTime =
+                server::getInstance()->getStoryViewTime(storyId, viewerId);
+            QLabel *viewTimeLabel = new QLabel();
+            if (viewTime.isValid()) {
+                viewTimeLabel->setText(viewTime.toString("hh:mm"));
+                viewTimeLabel->setStyleSheet(
+                    "color: #6e6e8e; font-size: 12px;");
+            }
+
+            viewerLayout->addWidget(viewerAvatar);
+            viewerLayout->addWidget(viewerName, 1);
+            viewerLayout->addWidget(viewTimeLabel);
+
+            viewersListLayout->addWidget(viewerItem);
         }
-
-        // If no viewers, show a message
-        if (viewers.isEmpty()) {
-            QLabel *noViewersLabel = new QLabel("No viewers yet");
-            noViewersLabel->setStyleSheet(
-                "color: #6e6e8e; font-size: 14px; padding: 10px;");
-            noViewersLabel->setAlignment(Qt::AlignCenter);
-            viewersListLayout->addWidget(noViewersLabel);
-        }
-
-        // Add a stretch to push everything to the top
-        viewersListLayout->addStretch();
-
-        viewersScrollArea->setWidget(viewersListWidget);
-        viewersLayout->addWidget(viewersScrollArea);
-    } else { // Remove this entire else block
-        // For non-owners, we don't show any viewer information at all
     }
+
+    // If no viewers, show a message
+    if (viewers.isEmpty()) {
+        QLabel *noViewersLabel = new QLabel("No viewers yet");
+        noViewersLabel->setStyleSheet(
+            "color: #6e6e8e; font-size: 14px; padding: 10px;");
+        noViewersLabel->setAlignment(Qt::AlignCenter);
+        viewersListLayout->addWidget(noViewersLabel);
+    }
+
+    // Add a stretch to push everything to the top
+    viewersListLayout->addStretch();
+
+    viewersScrollArea->setWidget(viewersListWidget);
+    viewersLayout->addWidget(viewersScrollArea);
 
     dialogLayout->addWidget(headerWidget);
     dialogLayout->addWidget(storyImage, 1);
     dialogLayout->addWidget(captionLabel);
-    
-    // Only add viewers widget if it was created (for the story owner)
-    if (viewersWidget) {
-        dialogLayout->addWidget(viewersWidget);
-    }
+    dialogLayout->addWidget(viewersWidget);
 
     // Close button
     QPushButton *closeButton = new QPushButton("Close");
@@ -3837,7 +3410,7 @@ void ChatPage::showStoryDialog(const StoryInfo &story) {
     // Remove the StoryTimer that was handling countdown and auto-closing
 
     // Show the dialog (blocks until dialog is closed)
-    openDialog(storyDialog);
+    storyDialog->exec();
 }
 
 void ChatPage::clearStoryWidgets() {
@@ -4162,1099 +3735,38 @@ void ChatPage::loadBlockedUsersPane() {
 
 // Add to the end of the file before the last closing brace
 void ChatPage::showCreateGroupDialog() {
-    // Clear any previously selected members
-    QStringList selectedMembers;
-    
-    // Create dialog
+    // Create a dialog for creating a new group
     QDialog *groupDialog = new QDialog(this);
-    groupDialog->setWindowTitle("Create Group");
-    groupDialog->setMinimumSize(400, 500);
-    groupDialog->setStyleSheet("background-color: #12121a; color: white;");
-    
+    groupDialog->setWindowTitle("Create New Group");
+    groupDialog->setFixedSize(450, 600);
+    groupDialog->setStyleSheet("background-color: #1e1e2e;");
+
     QVBoxLayout *dialogLayout = new QVBoxLayout(groupDialog);
-    dialogLayout->setSpacing(15);
-    
-    // Group name input
-    QLabel *nameLabel = new QLabel("Group Name:");
-    QLineEdit *nameInput = new QLineEdit();
-    nameInput->setStyleSheet(R"(
-        QLineEdit {
-            background-color: #1d1d2b;
-            border-radius: 8px;
-            padding: 10px;
-            color: white;
-            border: 1px solid #3d3d4b;
-        }
-        QLineEdit:focus {
-            border: 1px solid #4d6eaa;
-        }
-    )");
-    
-    // Users list
-    QLabel *usersLabel = new QLabel("Select Members:");
-    QListWidget *userSelectionList = new QListWidget();
-    userSelectionList->setStyleSheet(R"(
-        QListWidget {
-            background-color: #1d1d2b;
-            border-radius: 8px;
-            padding: 5px;
-            color: white;
-            border: 1px solid #3d3d4b;
-        }
-        QListWidget::item {
-            border-bottom: 1px solid #2d2d3b;
-            padding: 5px;
-        }
-        QListWidget::item:selected {
-            background-color: #4d6eaa;
-        }
-    )");
-    
-    userSelectionList->setSelectionMode(QAbstractItemView::NoSelection);
-    
-    // Add users to the list
-    Client *client = server::getInstance()->getCurrentClient();
-    if (client) {
-        QVector<UserInfo> allUsers = userList;
-        
-        // Get blocked users to exclude them
-        QVector<QString> blockedUsers = server::getInstance()->getBlockedUsers(client->getUserId());
-        
-        for (const UserInfo &user : allUsers) {
-            // Skip self and blocked users
-            if (user.email == client->getUserId() || blockedUsers.contains(user.email)) {
-                continue;
-            }
-            
-            // Create list item
-            QListWidgetItem *item = new QListWidgetItem();
-            userSelectionList->addItem(item);
-            
-            // Create widget for the item
-            QWidget *itemWidget = new QWidget();
-            QHBoxLayout *itemLayout = new QHBoxLayout(itemWidget);
-            itemLayout->setContentsMargins(5, 5, 5, 5);
-            itemLayout->setSpacing(8);
-
-            // Create avatar
-            QLabel *avatar = new QLabel();
-            avatar->setFixedSize(36, 36);
-            avatar->setAlignment(Qt::AlignCenter);
-            avatar->setStyleSheet("background-color: #4d6eaa; border-radius: 18px;");
-            
-            // Get avatar path or use first letter
-            QString avatarPath = server::getInstance()->getUserAvatar(user.email);
-            if (!avatarPath.isEmpty() && QFile::exists(avatarPath)) {
-                QPixmap userAvatar(avatarPath);
-                avatar->setPixmap(userAvatar.scaled(36, 36, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-            } else {
-                avatar->setText(user.name.left(1).toUpper());
-                avatar->setStyleSheet("background-color: #4d6eaa; border-radius: 18px; color: white; font-weight: bold;");
-            }
-            
-            // Create checkbox with username
-            QCheckBox *checkbox = new QCheckBox(user.name);
-            checkbox->setProperty("email", user.email);
-            
-            // Use a direct connection instead of a lambda
-            connect(checkbox, &QCheckBox::toggled, groupDialog, [&selectedMembers, email=user.email](bool checked) {
-                if (checked) {
-                    if (!selectedMembers.contains(email)) {
-                        selectedMembers.append(email);
-                    }
-                } else {
-                    selectedMembers.removeAll(email);
-                }
-            });
-            
-            // Add to layout
-            itemLayout->addWidget(avatar);
-            itemLayout->addWidget(checkbox, 1);
-            itemWidget->setLayout(itemLayout);
-            
-            // Set the widget for this item
-            userSelectionList->setItemWidget(item, itemWidget);
-        }
-    }
-
-    // Create and cancel buttons
-    QHBoxLayout *buttonLayout = new QHBoxLayout();
-    buttonLayout->setSpacing(10);
-
-    QPushButton *cancelButton = new QPushButton("Cancel");
-    cancelButton->setStyleSheet(R"(
-        QPushButton {
-            background-color: #E15554;
-            color: white;
-            border-radius: 8px;
-            padding: 10px 20px;
-            font-size: 15px;
-        }
-        QPushButton:hover {
-            background-color: #D14545;
-        }
-    )");
-    
-    QPushButton *createButton = new QPushButton("Create Group");
-    createButton->setStyleSheet(R"(
-        QPushButton {
-            background-color: #4d6eaa;
-            color: white;
-            border-radius: 8px;
-            padding: 10px 20px;
-            font-size: 15px;
-        }
-        QPushButton:hover {
-            background-color: #3d5e9a;
-        }
-    )");
-    
-    buttonLayout->addWidget(cancelButton);
-    buttonLayout->addWidget(createButton);
-    
-    // Add widgets to dialog layout
-    dialogLayout->addWidget(nameLabel);
-    dialogLayout->addWidget(nameInput);
-    dialogLayout->addWidget(usersLabel);
-    dialogLayout->addWidget(userSelectionList);
-    dialogLayout->addLayout(buttonLayout);
-    
-    // Connect button signals
-    connect(cancelButton, &QPushButton::clicked, groupDialog, &QDialog::reject);
-    
-    connect(createButton, &QPushButton::clicked, [this, nameInput, &selectedMembers, groupDialog, dialogLayout]() {
-        QString groupName = nameInput->text().trimmed();
-        if (groupName.isEmpty()) {
-            // Show error message
-            QLabel *errorLabel = new QLabel("Please enter a group name");
-            errorLabel->setStyleSheet("color: #E15554;");
-            dialogLayout->insertWidget(2, errorLabel);
-            QTimer::singleShot(3000, errorLabel, &QLabel::deleteLater);
-            return;
-        }
-        
-        if (selectedMembers.isEmpty()) {
-            // Show error message
-            QLabel *errorLabel = new QLabel("Please select at least one member");
-            errorLabel->setStyleSheet("color: #E15554;");
-            dialogLayout->insertWidget(4, errorLabel);
-            QTimer::singleShot(3000, errorLabel, &QLabel::deleteLater);
-            return;
-        }
-        
-        // Create the group - make a safe copy of the members
-        QStringList membersCopy = selectedMembers;
-        // Double-check to make sure the copy is valid
-        if (membersCopy.isEmpty()) {
-            membersCopy.append(server::getInstance()->getCurrentClient()->getUserId());
-        }
-        
-        createNewGroup(groupName, membersCopy);
-        groupDialog->accept();
-    });
-    
-    // Show as a modal dialog instead of using our stack
-    groupDialog->exec();
-}
-
-/*
- * Contributor: Hossam
- * Function: navigateToState
- * Description: Implements navigation history tracking using std::list.
- * This is part of the college requirement to demonstrate STL containers.
- * Pushes the current state to navigation history and moves to a new state.
- */
-void ChatPage::navigateToState(NavigationState state, const QString &identifier) {
-    // Create a navigation entry for the current state before navigating
-    if (!navigationHistory.empty()) {
-        // Don't add duplicate entries
-        NavigationEntry &currentEntry = navigationHistory.back();
-        if (currentEntry.state == state && 
-            currentEntry.identifier == identifier.toStdString()) {
-            return;
-        }
-    }
-    
-    // Create a new entry
-    NavigationEntry entry;
-    entry.state = state;
-    entry.identifier = identifier.toStdString();
-    
-    // Add to navigation history
-    navigationHistory.push_back(entry);
-    
-    // Implement the actual navigation logic based on the state
-    switch (state) {
-        case NavigationState::CHATS:
-            contentStack->setCurrentIndex(0); // Chats page
-            break;
-            
-        case NavigationState::STORIES:
-            contentStack->setCurrentIndex(1); // Stories page
-            loadStories();
-            break;
-            
-        case NavigationState::SETTINGS:
-            contentStack->setCurrentIndex(2); // Settings page
-            loadUserSettings();
-            break;
-            
-        case NavigationState::BLOCKED_USERS:
-            contentStack->setCurrentIndex(3); // Blocked users page
-            loadBlockedUsersPane();
-            break;
-            
-        case NavigationState::CHAT_DETAIL:
-            contentStack->setCurrentIndex(0); // Back to chats page
-            // Find and select the user with the given identifier
-            for (int i = 0; i < userList.size(); i++) {
-                if (userList[i].email == identifier) {
-                    handleUserSelected(i);
-                    break;
-                }
-            }
-            break;
-            
-        case NavigationState::GROUP_DETAIL:
-            contentStack->setCurrentIndex(0); // Back to chats page
-            // Find and select the group with the given identifier
-            for (int i = 0; i < groupList.size(); i++) {
-                if (groupList[i].groupId == identifier) {
-                    updateGroupChatArea(i);
-                    break;
-                }
-            }
-            break;
-            
-        default:
-            break;
-    }
-}
-
-/*
- * Contributor: Hossam
- * Function: goBack
- * Description: Implements navigation history tracking using std::list.
- * This is part of the college requirement to demonstrate STL containers.
- * Pops the current state from navigation history and returns to the previous state.
- */
-void ChatPage::goBack() {
-    if (navigationHistory.size() <= 1) {
-        // If we're at the root or have no history, do nothing
-        return;
-    }
-    
-    // Remove the current state
-    navigationHistory.pop_back();
-    
-    // Get the previous state
-    NavigationEntry prevEntry = navigationHistory.back();
-    
-    // Remove this entry as well, as we'll add it back with navigateToState
-    navigationHistory.pop_back();
-    
-    // Navigate to the previous state
-    navigateToState(prevEntry.state, QString::fromStdString(prevEntry.identifier));
-}
-
-/*
- * Contributor: Hossam
- * Function: openDialog
- * Description: Implements dialog management using std::stack.
- * This is part of the college requirement to demonstrate STL containers.
- * Pushes a new dialog onto the stack and shows it.
- */
-void ChatPage::openDialog(QDialog* dialog) {
-    if (!dialog) return;
-    
-    // Connect the dialog's finished signal to closeTopDialog
-    connect(dialog, &QDialog::finished, this, &ChatPage::closeTopDialog);
-    
-    // Create a shared_ptr to manage the dialog
-    std::shared_ptr<QDialog> dialogPtr(dialog);
-    
-    // Push onto the stack
-    dialogStack.push(dialogPtr);
-    
-    // Show the dialog
-    dialog->show();
-}
-
-/*
- * Contributor: Hossam
- * Function: closeTopDialog
- * Description: Implements dialog management using std::stack.
- * This is part of the college requirement to demonstrate STL containers.
- * Pops the top dialog from the stack when it's closed.
- */
-void ChatPage::closeTopDialog() {
-    if (!dialogStack.empty()) {
-        // Get the dialog from the stack
-        std::shared_ptr<QDialog> dialogPtr = dialogStack.top();
-        dialogStack.pop();
-        
-        // Close the dialog
-        if (dialogPtr) {
-            dialogPtr->reject();
-        }
-    }
-}
-
-/*
- * Contributor: Hossam
- * Function: loadGroupsFromDatabase
- * Description: Loads group chat data from the database.
- * Initializes the group list and messages in the UI.
- */
-void ChatPage::loadGroupsFromDatabase() {
-    // Clear existing groups
-    groupList.clear();
-    groupMessages.clear();
-    
-    // Get current client
-    Client *client = server::getInstance()->getCurrentClient();
-    if (!client) return;
-    
-    QString userId = client->getUserId();
-    
-    // Create groups directory if it doesn't exist
-    QDir dir;
-    dir.mkpath("../db/groups");
-    
-    // Check for existing groups
-    QDir groupsDir("../db/groups");
-    QStringList groupDirs = groupsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    
-    // For each group directory, check if the current user is a member
-    for (const QString &groupId : groupDirs) {
-        QString membersPath = "../db/groups/" + groupId + "/members.txt";
-        QFile membersFile(membersPath);
-        
-        if (membersFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream in(&membersFile);
-            bool isUserMember = false;
-            QString adminId;
-            QStringList members;
-            
-            // Read all members
-            while (!in.atEnd()) {
-                QString line = in.readLine().trimmed();
-                if (line.startsWith("ADMIN:")) {
-                    adminId = line.mid(6).trimmed();
-                    members.append(adminId);
-                    if (adminId == userId) {
-                        isUserMember = true;
-                    }
-                } else if (!line.isEmpty()) {
-                    members.append(line);
-                    if (line == userId) {
-                        isUserMember = true;
-                    }
-                }
-            }
-            membersFile.close();
-            
-            // If user is a member, load the group
-            if (isUserMember) {
-                // Read group info
-                QString infoPath = "../db/groups/" + groupId + "/info.txt";
-                QFile infoFile(infoPath);
-                
-                GroupInfo group;
-                group.groupId = groupId;
-                group.name = "Group " + groupId; // Default name
-                group.adminId = adminId.isEmpty() ? userId : adminId;
-                group.members = members;
-                group.hasMessages = false;
-                group.lastMessage = "";
-                group.lastSeen = "";
-                group.hasCustomImage = false;
-                
-                if (infoFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    QTextStream infoIn(&infoFile);
-                    
-                    while (!infoIn.atEnd()) {
-                        QString line = infoIn.readLine().trimmed();
-                        if (line.startsWith("NAME:")) {
-                            group.name = line.mid(5).trimmed();
-                        } else if (line.startsWith("IMAGE:")) {
-                            group.hasCustomImage = true;
-                            QString imagePath = line.mid(6).trimmed();
-                            if (!imagePath.isEmpty() && QFile::exists(imagePath)) {
-                                group.groupImage = QPixmap(imagePath);
-                            }
-                        }
-                    }
-                    infoFile.close();
-                }
-                
-                // Load messages
-                QString messagesPath = "../db/groups/" + groupId + "/messages/messages.txt";
-                QFile messagesFile(messagesPath);
-                
-                QVector<MessageInfo> messages;
-                
-                if (messagesFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                    QTextStream msgIn(&messagesFile);
-                    
-                    while (!msgIn.atEnd()) {
-                        QString line = msgIn.readLine().trimmed();
-                        if (!line.isEmpty()) {
-                            QStringList parts = line.split("|");
-                            if (parts.size() >= 3) {
-                                MessageInfo msg;
-                                msg.sender = parts[0];
-                                msg.timestamp = QDateTime::fromString(parts[1], Qt::ISODate);
-                                msg.text = parts[2];
-                                msg.isFromMe = (msg.sender == userId);
-                                
-                                messages.append(msg);
-                                
-                                // Update last message info
-                                group.hasMessages = true;
-                                group.lastMessage = msg.text;
-                                
-                                // Calculate "last seen" text
-                                QDateTime now = QDateTime::currentDateTime();
-                                qint64 secsAgo = msg.timestamp.secsTo(now);
-                                
-                                if (secsAgo < 60) {
-                                    group.lastSeen = "Just now";
-                                } else if (secsAgo < 3600) {
-                                    group.lastSeen = QString::number(secsAgo / 60) + " min ago";
-                                } else if (secsAgo < 86400) {
-                                    group.lastSeen = QString::number(secsAgo / 3600) + " hours ago";
-                                } else {
-                                    group.lastSeen = msg.timestamp.toString("MMM d");
-                                }
-                            }
-                        }
-                    }
-                    messagesFile.close();
-                }
-                
-                // Add group to list
-                groupList.append(group);
-                
-                // Add messages to group messages
-                groupMessages.append(messages);
-            }
-        }
-    }
-    
-    // If we're starting fresh, create sample groups
-    if (groupList.isEmpty()) {
-        // Create a sample group with the current user if needed
-        GroupInfo sampleGroup;
-        sampleGroup.groupId = QString::number(QDateTime::currentDateTime().toMSecsSinceEpoch());
-        sampleGroup.name = "My Group Chat";
-        sampleGroup.adminId = userId;
-        sampleGroup.members.append(userId);
-        
-        // Try to add one other user if available
-        for (const UserInfo &user : userList) {
-            if (user.email != userId) {
-                sampleGroup.members.append(user.email);
-                break;
-            }
-        }
-        
-        // Only add if we have more than just ourselves
-        if (sampleGroup.members.size() > 1) {
-            groupList.append(sampleGroup);
-            groupMessages.append(QVector<MessageInfo>());
-            
-            // Save this group to database
-            saveGroupToDatabase(sampleGroup);
-        }
-    }
-
-    qDebug() << "Loaded" << groupList.size() << "groups";
-    updateGroupsList();
-    updateUsersList();
-}
-
-/*
- * Contributor: Hossam
- * Function: createGroupListItem
- * Description: Creates a UI list item for a group chat.
- * Part of the UI rendering for group chats in the sidebar.
- */
-QListWidgetItem* ChatPage::createGroupListItem(const GroupInfo &group, int index) {
-    QListWidgetItem *item = new QListWidgetItem;
-    item->setData(Qt::UserRole, index);
-    item->setData(Qt::UserRole + 2, true); // Mark as group
-    
-    // Create widget for item
-    QWidget *widget = new QWidget();
-    QHBoxLayout *layout = new QHBoxLayout(widget);
-    layout->setContentsMargins(5, 5, 5, 5);
-    layout->setSpacing(8);
-    
-    // Create avatar for the group
-    QLabel *avatar = new QLabel();
-    avatar->setFixedSize(40, 40);
-    avatar->setAlignment(Qt::AlignCenter);
-    avatar->setStyleSheet("background-color: #4d6eaa; border-radius: 20px; color: white; font-weight: bold;");
-    
-    if (group.hasCustomImage && !group.groupImage.isNull()) {
-        QPixmap scaledPixmap = group.groupImage.scaled(40, 40, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        avatar->setPixmap(scaledPixmap);
-    } else {
-        avatar->setText(group.name.left(1).toUpper());
-    }
-    
-    // Create info widget (name, last message, etc.)
-    QWidget *infoWidget = new QWidget();
-    QVBoxLayout *infoLayout = new QVBoxLayout(infoWidget);
-    infoLayout->setContentsMargins(0, 0, 0, 0);
-    infoLayout->setSpacing(2);
-    
-    // Group name
-    QLabel *nameLabel = new QLabel(group.name);
-    nameLabel->setStyleSheet("color: white; font-weight: bold;");
-    
-    // Last message with time
-    QWidget *lastMessageWidget = new QWidget();
-    QHBoxLayout *lastMessageLayout = new QHBoxLayout(lastMessageWidget);
-    lastMessageLayout->setContentsMargins(0, 0, 0, 0);
-    lastMessageLayout->setSpacing(5);
-    
-    QLabel *lastMessageLabel = new QLabel(group.hasMessages ? group.lastMessage : "No messages yet");
-    lastMessageLabel->setStyleSheet("color: #9e9e9e; font-size: 12px;");
-    lastMessageLabel->setMaximumWidth(120);
-    
-    QLabel *timeLabel = new QLabel(group.hasMessages ? group.lastSeen : "");
-    timeLabel->setStyleSheet("color: #9e9e9e; font-size: 11px;");
-    timeLabel->setAlignment(Qt::AlignRight);
-    
-    lastMessageLayout->addWidget(lastMessageLabel);
-    lastMessageLayout->addWidget(timeLabel, 0, Qt::AlignRight);
-    
-    infoLayout->addWidget(nameLabel);
-    infoLayout->addWidget(lastMessageWidget);
-    
-    // Members count badge
-    QLabel *memberCount = new QLabel(QString::number(group.members.size()));
-    memberCount->setFixedSize(24, 24);
-    memberCount->setAlignment(Qt::AlignCenter);
-    memberCount->setStyleSheet("background-color: #2e2e4e; color: white; border-radius: 12px; font-size: 11px;");
-    
-    // Add to layout
-    layout->addWidget(avatar);
-    layout->addWidget(infoWidget, 1);
-    layout->addWidget(memberCount);
-    
-    // Set appropriate size
-    item->setSizeHint(QSize(usersListWidget->width(), 60));
-    
-    // Store widget in item
-    item->setData(Qt::UserRole + 1, QVariant::fromValue(widget));
-    
-    return item;
-}
-
-/*
- * Contributor: Hossam
- * Function: saveGroupToDatabase
- * Description: Saves a group to the database.
- * Creates necessary directories and files for group data persistence.
- */
-bool ChatPage::saveGroupToDatabase(const GroupInfo &group) {
-    // Create directories if they don't exist
-    QDir dir;
-    dir.mkpath("../db/groups/" + group.groupId);
-    dir.mkpath("../db/groups/" + group.groupId + "/messages");
-    
-    // Save group info
-    QString infoPath = "../db/groups/" + group.groupId + "/info.txt";
-    QFile infoFile(infoPath);
-    
-    if (infoFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&infoFile);
-        out << "NAME:" << group.name << "\n";
-        
-        // Save image path if available
-        if (group.hasCustomImage && !group.groupImage.isNull()) {
-            QString imagePath = "../db/groups/" + group.groupId + "/image.png";
-            group.groupImage.save(imagePath, "PNG");
-            out << "IMAGE:" << imagePath << "\n";
-        }
-        
-        infoFile.close();
-    }
-    
-    // Save members
-    QString membersPath = "../db/groups/" + group.groupId + "/members.txt";
-    QFile membersFile(membersPath);
-    
-    if (membersFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        QTextStream out(&membersFile);
-        
-        // First write admin
-        out << "ADMIN:" << group.adminId << "\n";
-        
-        // Then write other members
-        for (const QString &member : group.members) {
-            if (member != group.adminId) {
-                out << member << "\n";
-            }
-        }
-        
-        membersFile.close();
-    }
-}
-
-/*
- * Contributor: Hossam
- * Function: updateGroupChatArea
- * Description: Updates the chat area when a group is selected.
- * Displays the group name and messages in the main chat window.
- */
-void ChatPage::updateGroupChatArea(int index) {
-    if (index < 0 || index >= groupList.size())
-        return;
-    
-    const GroupInfo &group = groupList[index];
-    
-    // Update header with group info
-    QString headerText = "Group: " + group.name + " (" + QString::number(group.members.size()) + " members)";
-    chatHeader->setText(headerText);
-    
-    // Clear existing messages
-    QLayoutItem *item;
-    while ((item = messageLayout->takeAt(0)) != nullptr) {
-        if (item->widget()) {
-            delete item->widget();
-        }
-        delete item;
-    }
-    messageLayout->addStretch(); // Re-add stretch to push messages up
-    
-    // Add messages to UI
-    if (index < groupMessages.size()) {
-        const QVector<MessageInfo> &messages = groupMessages[index];
-        
-        for (const MessageInfo &msg : messages) {
-            addGroupMessageToUI(msg.text, msg.sender, msg.timestamp);
-        }
-    }
-    
-    // Add a "show options" button to the header
-    if (!chatHeader->actions().isEmpty()) {
-        // Remove existing actions first
-        for (QAction *action : chatHeader->actions()) {
-            chatHeader->removeAction(action);
-        }
-    }
-    
-    QAction *showOptionsAction = new QAction("📝", this);
-    showOptionsAction->setToolTip("Group Options");
-    connect(showOptionsAction, &QAction::triggered, [this, index]() {
-        showGroupOptions(index);
-    });
-    
-    chatHeader->addAction(showOptionsAction);
-    
-    // Scroll to bottom
-    QScrollBar *vScrollBar = messageArea->verticalScrollBar();
-    vScrollBar->setValue(vScrollBar->maximum());
-}
-
-/*
- * Contributor: Hossam
- * Function: addGroupMessageToUI
- * Description: Adds a message to the group chat UI.
- * Shows sender name and formats the message appropriately.
- */
-void ChatPage::addGroupMessageToUI(const QString &text, const QString &sender, const QDateTime &timestamp) {
-    if (text.isEmpty())
-        return;
-    
-    // Get current client
-    Client *client = server::getInstance()->getCurrentClient();
-    if (!client)
-        return;
-    
-    // Check if this is from current user
-    bool isFromMe = (sender == client->getUserId());
-    
-    // Get sender's display name
-    QString senderName = sender;
-    // Try to get a friendly name from the server
-    QString nickname, bio;
-    if (server::getInstance()->getUserSettings(sender, nickname, bio) && !nickname.isEmpty()) {
-        senderName = nickname;
-    } else {
-        // Try to find in user list
-        for (const UserInfo &user : userList) {
-            if (user.email == sender) {
-                senderName = user.name;
-                break;
-            }
-        }
-    }
-    
-    // Create message bubble
-    QWidget *bubble = new QWidget();
-    bubble->setObjectName("messageBubble");
-    bubble->setProperty("fromMe", isFromMe);
-    
-    QVBoxLayout *bubbleLayout = new QVBoxLayout(bubble);
-    bubbleLayout->setContentsMargins(10, 8, 10, 8);
-    bubbleLayout->setSpacing(2);
-    
-    // Add sender name if not from me
-    if (!isFromMe) {
-        QLabel *senderLabel = new QLabel(senderName);
-        senderLabel->setStyleSheet("color: #65a9e0; font-weight: bold; font-size: 12px;");
-        bubbleLayout->addWidget(senderLabel);
-    }
-    
-    // Message text
-    QLabel *textLabel = new QLabel(text);
-    textLabel->setWordWrap(true);
-    textLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    textLabel->setCursor(Qt::IBeamCursor);
-    textLabel->setStyleSheet("color: white;");
-    
-    // Time
-    QLabel *timeLabel = new QLabel(timestamp.toString("hh:mm"));
-    timeLabel->setStyleSheet("color: rgba(255,255,255,0.5); font-size: 10px;");
-    timeLabel->setAlignment(Qt::AlignRight);
-    
-    bubbleLayout->addWidget(textLabel);
-    bubbleLayout->addWidget(timeLabel);
-    
-    // Style the bubble based on sender
-    if (isFromMe) {
-        bubble->setStyleSheet(R"(
-            #messageBubble {
-                background-color: #4d6eaa;
-                border-radius: 15px;
-                border-top-right-radius: 5px;
-                padding: 5px;
-            }
-        )");
-    } else {
-        bubble->setStyleSheet(R"(
-            #messageBubble {
-                background-color: #3e3e5e;
-                border-radius: 15px;
-                border-top-left-radius: 5px;
-                padding: 5px;
-            }
-        )");
-    }
-    
-    // Create container for alignment
-    QWidget *container = new QWidget();
-    QHBoxLayout *containerLayout = new QHBoxLayout(container);
-    containerLayout->setContentsMargins(10, 0, 10, 0);
-    
-    // Add the bubble to the left or right depending on sender
-    if (isFromMe) {
-        containerLayout->addStretch();
-        containerLayout->addWidget(bubble);
-    } else {
-        containerLayout->addWidget(bubble);
-        containerLayout->addStretch();
-    }
-    
-    // Add the container to the message area
-    messageLayout->insertWidget(messageLayout->count() - 1, container);
-}
-
-/*
- * Contributor: Hossam
- * Function: addMemberToGroup
- * Description: Adds a new member to an existing group.
- * Opens a dialog to select a user and adds them to the group.
- */
-void ChatPage::addMemberToGroup(int groupIndex) {
-    if (groupIndex < 0 || groupIndex >= groupList.size())
-        return;
-    
-    // Simple implementation to add the first available user who is not already in the group
-    GroupInfo &group = groupList[groupIndex];
-    Client *client = server::getInstance()->getCurrentClient();
-    if (!client) return;
-    
-    // Get blocked users
-    QVector<QString> blockedUsers = server::getInstance()->getBlockedUsers(client->getUserId());
-    QSet<QString> blockedUsersSet(blockedUsers.begin(), blockedUsers.end());
-    
-    // Create a set of existing members for fast lookup
-    QSet<QString> existingMembers(group.members.begin(), group.members.end());
-    
-    // Find a user to add
-    for (const UserInfo &user : userList) {
-        if (!existingMembers.contains(user.email) && !blockedUsersSet.contains(user.email)) {
-            // Add user to the group
-            group.members.append(user.email);
-            
-            // Save updated group to database
-            saveGroupToDatabase(group);
-            
-            // Update UI
-            updateGroupChatArea(groupIndex);
-            updateUsersList();
-            
-            return;
-        }
-    }
-}
-
-/*
- * Contributor: Hossam
- * Function: removeMemberFromGroup
- * Description: Removes a member from a group chat.
- * Updates the group membership list and saves changes to database.
- */
-void ChatPage::removeMemberFromGroup(int groupIndex, const QString &memberId) {
-    if (groupIndex < 0 || groupIndex >= groupList.size())
-        return;
-    
-    GroupInfo &group = groupList[groupIndex];
-    
-    // Cannot remove admin
-    if (memberId == group.adminId)
-        return;
-    
-    // Remove the member
-    group.members.removeOne(memberId);
-    
-    // Save updated group to database
-    saveGroupToDatabase(group);
-    
-    // Update UI
-    updateGroupChatArea(groupIndex);
-    updateUsersList();
-}
-
-/*
- * Contributor: Hossam
- * Function: leaveGroup
- * Description: Allows current user to leave a group chat.
- * Removes the user from the group's member list and updates UI.
- */
-void ChatPage::leaveGroup(int groupIndex) {
-    if (groupIndex < 0 || groupIndex >= groupList.size())
-        return;
-    
-    // Get current user
-    Client *client = server::getInstance()->getCurrentClient();
-    if (!client) return;
-    
-    QString userId = client->getUserId();
-    GroupInfo &group = groupList[groupIndex];
-    
-    // If user is admin and there are other members, don't allow leaving
-    if (userId == group.adminId && group.members.size() > 1) {
-        // Show message that admin can't leave the group
-        QMessageBox::warning(this, "Cannot Leave Group", 
-                            "You are the admin of this group. You must make someone else the admin or delete the group.");
-        return;
-    }
-    
-    // Remove the user from the group
-    group.members.removeOne(userId);
-    
-    // If group is now empty, delete it
-    if (group.members.isEmpty()) {
-        deleteGroup(groupIndex);
-        return;
-    }
-    
-    // If user was admin, assign admin role to first remaining member
-    if (userId == group.adminId && !group.members.isEmpty()) {
-        group.adminId = group.members.first();
-    }
-    
-    // Save updated group to database
-    saveGroupToDatabase(group);
-    
-    // Remove group from user's view
-    groupList.removeAt(groupIndex);
-    if (groupIndex < groupMessages.size()) {
-        groupMessages.removeAt(groupIndex);
-    }
-    
-    // Return to main chat view
-    navigateToState(NavigationState::CHATS);
-    
-    // Update UI
-    updateUsersList();
-}
-
-/*
- * Contributor: Hossam
- * Function: deleteGroup
- * Description: Deletes a group chat entirely.
- * Removes the group from the database and updates the UI.
- */
-void ChatPage::deleteGroup(int groupIndex) {
-    if (groupIndex < 0 || groupIndex >= groupList.size())
-        return;
-    
-    GroupInfo &group = groupList[groupIndex];
-    
-    // Get current user
-    Client *client = server::getInstance()->getCurrentClient();
-    if (!client) return;
-    
-    QString userId = client->getUserId();
-    
-    // Only admin can delete the group
-    if (userId != group.adminId && !group.members.isEmpty()) {
-        return;
-    }
-    
-    // Delete group directory
-    QDir groupDir("../db/groups/" + group.groupId);
-    if (groupDir.exists()) {
-        groupDir.removeRecursively();
-    }
-    
-    // Remove from our lists
-    groupList.removeAt(groupIndex);
-    if (groupIndex < groupMessages.size()) {
-        groupMessages.removeAt(groupIndex);
-    }
-    
-    // Return to main chat view
-    navigateToState(NavigationState::CHATS);
-    
-    // Update UI
-    updateUsersList();
-}
-
-/*
- * Contributor: Hossam
- * Function: createNewGroup
- * Description: Creates a new group chat with the specified name and members.
- * Adds the group to the groupList and updates the UI.
- */
-void ChatPage::createNewGroup(const QString &groupName, const QStringList &members) {
-    if (groupName.isEmpty())
-        return;
-    
-    // Get current client
-    Client *client = server::getInstance()->getCurrentClient();
-    if (!client)
-        return;
-    
-    QString userId = client->getUserId();
-    
-    // Create new group
-    GroupInfo group;
-    group.name = groupName;
-    group.groupId = QString::number(QDateTime::currentDateTime().toMSecsSinceEpoch());
-    group.adminId = userId;
-    
-    // Add current user if not already in members list
-    if (!members.contains(userId)) {
-        group.members = members;
-        group.members.append(userId);
-    } else {
-        group.members = members;
-    }
-    
-    group.hasMessages = false;
-    group.lastMessage = "";
-    group.lastSeen = "";
-    group.hasCustomImage = false;
-    
-    // Add group to list
-    groupList.append(group);
-    
-    // Add empty messages vector
-    groupMessages.append(QVector<MessageInfo>());
-    
-    // Create necessary directories for the group
-    QDir dir;
-    dir.mkpath("../db/groups/" + group.groupId);
-    dir.mkpath("../db/groups/" + group.groupId + "/messages");
-    
-    // Save to database
-    saveGroupToDatabase(group);
-    
-    // Update UI
-    updateGroupsList();
-    
-    // Add a welcome message
-    if (groupMessages.size() == groupList.size()) {
-        // Create welcome message
-        MessageInfo welcomeMsg;
-        welcomeMsg.text = "Welcome to the group '" + groupName + "'!";
-        welcomeMsg.sender = userId;
-        welcomeMsg.isFromMe = true;
-        welcomeMsg.timestamp = QDateTime::currentDateTime();
-        
-        // Add to messages
-        groupMessages.last().append(welcomeMsg);
-        
-        // Save message to file
-        QString messagesPath = "../db/groups/" + group.groupId + "/messages/messages.txt";
-        QFile messagesFile(messagesPath);
-        
-        if (messagesFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&messagesFile);
-            out << userId << "|"
-                << welcomeMsg.timestamp.toString(Qt::ISODate) << "|"
-                << welcomeMsg.text << "\n";
-            messagesFile.close();
-        }
-        
-        // Update group info
-        groupList.last().hasMessages = true;
-        groupList.last().lastMessage = welcomeMsg.text;
-        groupList.last().lastSeen = "Just now";
-    }
-    
-    // Select the new group in the UI
-    updateGroupChatArea(groupList.size() - 1);
-    
-    // Output debug info
-    qDebug() << "Created new group:" << groupName << "with" << group.members.size() << "members";
-    qDebug() << "Total groups now:" << groupList.size();
-}
-
-/*
- * Contributor: Hossam
- * Function: showGroupOptions
- * Description: Displays options menu for a group chat.
- * Shows options like add member, leave group, etc.
- */
-void ChatPage::showGroupOptions(int groupIndex) {
-    if (groupIndex < 0 || groupIndex >= groupList.size())
-        return;
-    
-    GroupInfo &group = groupList[groupIndex];
-    
-    // Create dialog
-    QDialog *optionsDialog = new QDialog(this);
-    optionsDialog->setWindowTitle("Group Options: " + group.name);
-    optionsDialog->setFixedSize(400, 450);
-    optionsDialog->setStyleSheet("background-color: #1e1e2e;");
-    
-    QVBoxLayout *dialogLayout = new QVBoxLayout(optionsDialog);
     dialogLayout->setContentsMargins(20, 20, 20, 20);
     dialogLayout->setSpacing(15);
-    
-    // Group name and info
-    QLabel *groupNameLabel = new QLabel("Group Name: " + group.name);
-    groupNameLabel->setStyleSheet("color: white; font-size: 18px; font-weight: bold;");
-    
-    QLabel *membersCountLabel = new QLabel("Members: " + QString::number(group.members.size()));
-    membersCountLabel->setStyleSheet("color: #9e9e9e; font-size: 14px;");
-    
-    // List of members
-    QLabel *membersLabel = new QLabel("Members:");
-    membersLabel->setStyleSheet("color: white; font-size: 16px;");
-    
-    QListWidget *membersList = new QListWidget();
-    membersList->setStyleSheet(R"(
+
+    // Group name input
+    QLabel *nameLabel = new QLabel("Group Name:");
+    nameLabel->setStyleSheet("color: white; font-size: 16px;");
+
+    QLineEdit *nameInput = new QLineEdit();
+    nameInput->setPlaceholderText("Enter group name...");
+    nameInput->setStyleSheet(R"(
+        background-color: #2e2e3e;
+        color: white;
+        border-radius: 8px;
+        padding: 10px;
+        border: none;
+        font-size: 15px;
+    )");
+    nameInput->setFixedHeight(40);
+
+    // Available users list with checkboxes
+    QLabel *usersLabel = new QLabel("Select Members:");
+    usersLabel->setStyleSheet("color: white; font-size: 16px;");
+
+    QListWidget *userSelectionList = new QListWidget();
+    userSelectionList->setStyleSheet(R"(
         QListWidget {
             background-color: #2e2e3e;
             border-radius: 8px;
@@ -5269,197 +3781,1681 @@ void ChatPage::showGroupOptions(int groupIndex) {
         QListWidget::item:selected {
             background-color: #4e4e9e;
         }
+        QCheckBox {
+            color: white;
+            font-size: 15px;
+            margin-left: 5px;
+        }
     )");
+
+    // Populate the list with available users
+    Client *client = server::getInstance()->getCurrentClient();
+    if (client) {
+        // Get blocked users to exclude them
+        QVector<QString> blockedUsers = server::getInstance()->getBlockedUsers(client->getUserId());
+        QSet<QString> blockedUsersSet;
+        for (const QString &blocked : blockedUsers) {
+            blockedUsersSet.insert(blocked);
+        }
+
+        // Add all users except current user and blocked users
+        for (const UserInfo &user : userList) {
+            // Skip blocked users
+            if (blockedUsersSet.contains(user.email)) {
+                continue;
+            }
+
+            // Create list item
+            QListWidgetItem *item = new QListWidgetItem(userSelectionList);
+            
+            // Create main widget for the item
+            QWidget *itemWidget = new QWidget();
+            QHBoxLayout *itemLayout = new QHBoxLayout(itemWidget);
+            itemLayout->setContentsMargins(5, 5, 5, 5);
+            itemLayout->setSpacing(8);
+            
+            // Create avatar
+            QLabel *avatar = new QLabel();
+            avatar->setFixedSize(36, 36);
+            avatar->setAlignment(Qt::AlignCenter);
+            
+            // Check if user has a custom avatar
+            QString avatarPath = server::getInstance()->getUserAvatar(user.email);
+            if (!avatarPath.isEmpty() && QFile::exists(avatarPath)) {
+                QPixmap userAvatar(avatarPath);
+                if (!userAvatar.isNull()) {
+                    // Scale and crop the avatar to a circle
+                    QPixmap scaledAvatar = userAvatar.scaled(
+                        avatar->width(), avatar->height(), 
+                        Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                    
+                    QPixmap circularAvatar(scaledAvatar.size());
+                    circularAvatar.fill(Qt::transparent);
+                    
+                    QPainter painter(&circularAvatar);
+                    painter.setRenderHint(QPainter::Antialiasing);
+                    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+                    
+                    QPainterPath path;
+                    path.addEllipse(0, 0, scaledAvatar.width(), scaledAvatar.height());
+                    painter.setClipPath(path);
+                    painter.drawPixmap(0, 0, scaledAvatar);
+                    painter.end();
+                    
+                    avatar->setPixmap(circularAvatar);
+                    avatar->setStyleSheet("border-radius: 18px; border: 1px solid #23233a;");
+                } else {
+                    // Fallback to letter avatar
+                    avatar->setText(user.name.left(1).toUpper());
+                    avatar->setStyleSheet(R"(
+                        background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #6a82fb, stop:1 #fc5c7d);
+                        color: white;
+                        border-radius: 18px;
+                        font-weight: bold;
+                        font-size: 16px;
+                        border: 1px solid #23233a;
+                    )");
+                }
+            } else {
+                // Use text-based avatar
+                avatar->setText(user.name.left(1).toUpper());
+                avatar->setStyleSheet(R"(
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #6a82fb, stop:1 #fc5c7d);
+                    color: white;
+                    border-radius: 18px;
+                    font-weight: bold;
+                    font-size: 16px;
+                    border: 1px solid #23233a;
+                )");
+            }
+            
+            // Name and status layout 
+            QWidget *textWidget = new QWidget();
+            QVBoxLayout *textLayout = new QVBoxLayout(textWidget);
+            textLayout->setContentsMargins(0, 0, 0, 0);
+            textLayout->setSpacing(2);
+            
+            QLabel *nameLabel = new QLabel(user.name);
+            nameLabel->setStyleSheet("color: white; font-size: 15px; font-weight: 500;");
+            
+            QLabel *statusLabel = new QLabel(user.isOnline ? "Online" : "Offline");
+            statusLabel->setStyleSheet(
+                QString("color: %1; font-size: 12px;")
+                .arg(user.isOnline ? "#4CAF50" : "#9E9E9E")
+            );
+            
+            textLayout->addWidget(nameLabel);
+            textLayout->addWidget(statusLabel);
+            
+            // Create checkbox directly in the main layout, adjacent to text
+            QCheckBox *checkbox = new QCheckBox();
+            checkbox->setProperty("userId", user.email);
+            checkbox->setFixedSize(24, 24);
+            checkbox->setStyleSheet(R"(
+                QCheckBox {
+                    margin-left: 0px;
+                }
+                QCheckBox::indicator {
+                    width: 20px;
+                    height: 20px;
+                }
+                QCheckBox::indicator:unchecked {
+                    border: 2px solid #6a82fb;
+                    border-radius: 4px;
+                    background-color: #2e2e3e;
+                }
+                QCheckBox::indicator:checked {
+                    border: 2px solid #6a82fb;
+                    border-radius: 4px;
+                    background-color: #6a82fb;
+                    image: url(resources/checkmark.svg);
+                }
+            )");
+            
+            // Add everything to main layout
+            itemLayout->addWidget(avatar);
+            itemLayout->addWidget(textWidget, 1); // stretch factor 1
+            itemLayout->addWidget(checkbox);
+            
+            // Set the item widget and size
+            item->setSizeHint(QSize(userSelectionList->width() - 20, 60)); // slight padding
+            userSelectionList->setItemWidget(item, itemWidget);
+        }
+    }
+
+    // Create group button
+    QPushButton *createButton = new QPushButton("Create Group");
+    createButton->setStyleSheet(R"(
+        background-color: #4d6eaa;
+        color: white;
+        border-radius: 8px;
+        padding: 12px;
+        border: none;
+        font-size: 15px;
+        font-weight: bold;
+    )");
+
+    // Cancel button
+    QPushButton *cancelButton = new QPushButton("Cancel");
+    cancelButton->setStyleSheet(R"(
+        background-color: #E15554;
+        color: white;
+        border-radius: 8px;
+        padding: 12px;
+        border: none;
+        font-size: 15px;
+    )");
+
+    // Connect buttons
+    connect(cancelButton, &QPushButton::clicked, groupDialog, &QDialog::reject);
+    connect(createButton, &QPushButton::clicked,
+            [this, groupDialog, nameInput, userSelectionList]() {
+                QString groupName = nameInput->text().trimmed();
+                if (groupName.isEmpty()) {
+                    QMessageBox::warning(groupDialog, "Error",
+                                        "Please enter a group name");
+                    return;
+                }
+
+                // Collect selected members
+                QStringList members;
+                for (int i = 0; i < userSelectionList->count(); i++) {
+                    QListWidgetItem *item = userSelectionList->item(i);
+                    QWidget *widget = userSelectionList->itemWidget(item);
+                    QCheckBox *checkbox = widget->findChild<QCheckBox *>();
+
+                    if (checkbox && checkbox->isChecked()) {
+                        QString userId = checkbox->property("userId").toString();
+                        if (!userId.isEmpty()) {
+                            members.append(userId);
+                        }
+                    }
+                }
+
+                if (members.isEmpty()) {
+                    QMessageBox::warning(groupDialog, "Error",
+                                        "Please select at least one member");
+                    return;
+                }
+
+                // Create the group
+                createNewGroup(groupName, members);
+                groupDialog->accept();
+            });
+
+    // Add buttons to horizontal layout
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    buttonLayout->addWidget(cancelButton);
+    buttonLayout->addWidget(createButton);
+
+    // Add all widgets to the dialog
+    dialogLayout->addWidget(nameLabel);
+    dialogLayout->addWidget(nameInput);
+    dialogLayout->addWidget(usersLabel);
+    dialogLayout->addWidget(userSelectionList);
+    dialogLayout->addLayout(buttonLayout);
+
+    // Show the dialog
+    groupDialog->exec();
+}
+
+void ChatPage::createNewGroup(const QString &groupName, const QStringList &members) {
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client) {
+        QMessageBox::warning(this, "Error",
+                             "You must be logged in to create a group.");
+        return;
+    }
+
+    QString currentUserId = client->getUserId();
+
+    // Create a unique group ID
+    QString groupId =
+        "group_" +
+        QString::number(QDateTime::currentDateTime().toSecsSinceEpoch()) + "_" +
+        QString::number(QRandomGenerator::global()->bounded(10000));
+
+    // Create the group info
+    GroupInfo newGroup;
+    newGroup.groupId = groupId;
+    newGroup.name = groupName;
+    newGroup.adminId = currentUserId;
+    newGroup.members = members;
+    newGroup.hasMessages = false;
+    newGroup.lastMessage = "";
+    newGroup.lastSeen = "";
+    newGroup.hasCustomImage = false;
+
+    // Add current user to members if not already there
+    if (!newGroup.members.contains(currentUserId)) {
+        newGroup.members.append(currentUserId);
+    }
+
+    // Save group to database
+    if (!saveGroupToDatabase(newGroup)) {
+        QMessageBox::warning(this, "Error",
+                             "Failed to create group. Please try again.");
+        return;
+    }
+
+    // Add group to our local list
+    groupList.append(newGroup);
+
+    // Initialize messages vector for this group
+    groupMessages.resize(groupList.size());
+
+    // Update UI
+    updateGroupsList();
+
+    // Let the user know group was created
+    QMessageBox::information(
+        this, "Success", "Group \"" + groupName + "\" created successfully!");
+
+    // Create rooms for all members to see the group
+    for (const QString &memberId : newGroup.members) {
+        // Create a room for this member if they're not the current user
+        if (memberId != currentUserId) {
+            // Instead of using server->addGroupForUser, create the group
+            // directory structure Create user's group directory
+            QString userGroupDir = "../db/users/" + memberId + "/groups";
+            QDir dir;
+            if (!dir.exists(userGroupDir)) {
+                dir.mkpath(userGroupDir);
+            }
+
+            // Save group info to a file for this user
+            QFile groupFile(userGroupDir + "/" + groupId + ".txt");
+            if (groupFile.open(QIODevice::WriteOnly)) {
+                QTextStream stream(&groupFile);
+                stream << "GroupID: " << groupId << "\n";
+                stream << "Name: " << groupName << "\n";
+                stream << "AdminID: " << currentUserId << "\n";
+                stream << "Members: ";
+                for (int i = 0; i < newGroup.members.size(); ++i) {
+                    stream << newGroup.members[i];
+                    if (i < newGroup.members.size() - 1) {
+                        stream << ",";
+                    }
+                }
+                stream << "\n";
+                groupFile.close();
+
+                qDebug() << "Added group info to user's directory:" << memberId;
+            }
+        }
+    }
+}
+
+QListWidgetItem *ChatPage::createGroupListItem(const GroupInfo &group, int index) {
+    QWidget *itemWidget = new QWidget;
+    QHBoxLayout *layout = new QHBoxLayout(itemWidget);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(16);
+
+    // Create a group avatar
+    QLabel *avatar = new QLabel();
+    avatar->setFixedSize(44, 44);
+    avatar->setAlignment(Qt::AlignCenter);
+
+    // Group avatar is either a custom image or a circle with the first letter
+    if (group.hasCustomImage && !group.groupImage.isNull()) {
+        // Scale and crop to circle
+        QPixmap scaledAvatar = group.groupImage.scaled(
+            avatar->width(), avatar->height(), Qt::KeepAspectRatio,
+            Qt::SmoothTransformation);
+
+        // Create a circular mask
+        QPixmap circularAvatar(scaledAvatar.size());
+        circularAvatar.fill(Qt::transparent);
+
+        QPainter painter(&circularAvatar);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+
+        QPainterPath path;
+        path.addEllipse(0, 0, scaledAvatar.width(), scaledAvatar.height());
+        painter.setClipPath(path);
+        painter.drawPixmap(0, 0, scaledAvatar);
+
+        avatar->setPixmap(circularAvatar);
+    } else {
+        // Use first letter of group name
+        avatar->setText(group.name.left(1).toUpper());
+
+        // Use a distinct gradient for groups
+        QString gradientColors =
+            "stop:0 #13547a, stop:1 #80d0c7"; // Blue-green gradient for groups
+
+        avatar->setStyleSheet(QString(R"(
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, %1);
+            color: white;
+            border-radius: 22px;
+            font-weight: bold;
+            font-size: 22px;
+            border: 2px solid #23233a;
+        )")
+                                  .arg(gradientColors));
+    }
+
+    // Create the text section with group name and member count
+    QWidget *textContainer = new QWidget;
+    QVBoxLayout *textLayout = new QVBoxLayout(textContainer);
+    textLayout->setContentsMargins(0, 0, 0, 0);
+    textLayout->setSpacing(2);
+
+    // Group name with 👥 icon to indicate it's a group
+    QLabel *nameLabel = new QLabel("🗣️" + group.name);
+    nameLabel->setStyleSheet(
+        "color: white; font-size: 17px; font-weight: 600;");
+    textLayout->addWidget(nameLabel);
+
+    // Member count
+    QLabel *memberCountLabel =
+        new QLabel(QString("%1 members").arg(group.members.size()));
+    memberCountLabel->setStyleSheet("color: #9E9E9E; font-size: 12px;");
+    textLayout->addWidget(memberCountLabel);
+
+    // Last message if it exists
+    if (!group.lastMessage.isEmpty()) {
+        QLabel *lastMsgLabel = new QLabel(group.lastMessage);
+        lastMsgLabel->setStyleSheet("color: #a0a0a0; font-size: 12px;");
+        textLayout->addWidget(lastMsgLabel);
+    }
+
+    layout->addWidget(avatar);
+    layout->addWidget(textContainer, 1);
+
+    QListWidgetItem *item = new QListWidgetItem;
+    item->setSizeHint(itemWidget->sizeHint());
+    item->setData(Qt::UserRole, index);
+    item->setData(Qt::UserRole + 2, true); // Mark as group (vs user)
+
+    // Store the widget pointer
+    item->setData(Qt::UserRole + 1, QVariant::fromValue(itemWidget));
+
+    // Make the item widget accept context menu events
+    itemWidget->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(itemWidget, &QWidget::customContextMenuRequested,
+            [this, index](const QPoint &pos) { showGroupOptions(index); });
+
+    return item;
+}
+
+void ChatPage::updateGroupChatArea(int index) {
+    qDebug() << "Updating group chat area for index:" << index;
+
+    if (index < 0 || index >= groupList.size())
+        return;
+
+    // Update header with group info
+    const GroupInfo &group = groupList[index];
+    chatHeader->setText("👥 " + group.name + " (" +
+                        QString::number(group.members.size()) + " members)");
+
+    // Clear existing messages from UI
+    QLayoutItem *item;
+    while ((item = messageLayout->takeAt(0)) != nullptr) {
+        if (item->widget()) {
+            delete item->widget();
+        }
+        delete item;
+    }
+    messageLayout->addStretch(); // Re-add stretch to push messages up
+
+    // Load messages for this group
+    currentGroupId = index;
     
-    // Current client
+    // Ensure this group has a messages vector initialized
+    if (currentGroupId >= groupMessages.size()) {
+        groupMessages.resize(currentGroupId + 1);
+    }
+    
+    // Load messages
+    loadGroupMessagesForCurrentGroup();
+
+    // Add messages to UI - now we're sure that messages are loaded
+    const QList<MessageInfo> &messages = groupMessages[currentGroupId];
+    for (const MessageInfo &msg : messages) {
+        addGroupMessageToUI(msg.text, msg.sender, msg.timestamp);
+    }
+
+    // Scroll to bottom
+    QScrollBar *vScrollBar = messageArea->verticalScrollBar();
+    vScrollBar->setValue(vScrollBar->maximum());
+}
+
+void ChatPage::loadGroupsFromDatabase() {
+    qDebug() << "Loading groups from database...";
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client) {
+        qDebug() << "No current client found!";
+        return;
+    }
+
+    // Clear existing groups
+    groupList.clear();
+
+    QString userId = client->getUserId();
+    QString groupsDir = "../db/users/" + userId + "/groups";
+
+    QDir dir(groupsDir);
+    if (!dir.exists()) {
+        dir.mkpath(groupsDir);
+        return; // No groups yet
+    }
+
+    // Get all group files
+    QStringList groupFiles =
+        dir.entryList(QStringList() << "*.txt", QDir::Files);
+
+    for (const QString &groupFile : groupFiles) {
+        QFile file(groupsDir + "/" + groupFile);
+        if (file.open(QIODevice::ReadOnly)) {
+            QTextStream stream(&file);
+            QString groupData = stream.readAll();
+            file.close();
+
+            QStringList lines = groupData.split("\n");
+            if (lines.size() >= 4) {
+                GroupInfo group;
+
+                // Parse each line for the group properties
+                for (const QString &line : lines) {
+                    if (line.startsWith("GroupID: ")) {
+                        group.groupId = line.mid(9).trimmed();
+                    } else if (line.startsWith("Name: ")) {
+                        group.name = line.mid(6).trimmed();
+                    } else if (line.startsWith("AdminID: ")) {
+                        group.adminId = line.mid(9).trimmed();
+                    } else if (line.startsWith("Members: ")) {
+                        QString membersStr = line.mid(9).trimmed();
+                        group.members = membersStr.split(",");
+                    }
+                }
+
+                // Check if group has messages
+                QString messagesFile =
+                    "../db/groups/" + group.groupId + "/messages/messages.txt";
+                QFile msgFile(messagesFile);
+                group.hasMessages = msgFile.exists();
+
+                // Get last message if available
+                if (group.hasMessages &&
+                    msgFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    // Read the last line to get the most recent message
+                    QString lastLine;
+                    QTextStream in(&msgFile);
+                    while (!in.atEnd()) {
+                        QString line = in.readLine();
+                        if (!line.isEmpty()) {
+                            lastLine = line;
+                        }
+                    }
+                    msgFile.close();
+
+                    if (!lastLine.isEmpty()) {
+                        QStringList parts = lastLine.split("|");
+                        if (parts.size() >= 3) {
+                            group.lastMessage =
+                                parts[2]; // The message text is the third part
+                            group.lastSeen = "Recent";
+                        }
+                    }
+                }
+
+                // Try to load group image
+                loadGroupImage(group);
+
+                // Add to list
+                groupList.append(group);
+
+                qDebug() << "Loaded group:" << group.name << "with"
+                         << group.members.size() << "members";
+            }
+        }
+    }
+
+    // Initialize messages vector for all groups
+    groupMessages.resize(groupList.size());
+
+    qDebug() << "Total groups loaded:" << groupList.size();
+}
+
+void ChatPage::showGroupOptions(int groupIndex) {
+    if (groupIndex < 0 || groupIndex >= groupList.size())
+        return;
+
+    const GroupInfo &group = groupList[groupIndex];
+    Client *client = server::getInstance()->getCurrentClient();
+
+    if (!client)
+        return;
+
+    QString currentUserId = client->getUserId();
+    bool isAdmin = (group.adminId == currentUserId);
+
+    QMenu *menu = new QMenu(this);
+
+    // Add members option (admin only)
+    if (isAdmin) {
+        QAction *addMemberAction = menu->addAction("Add Members");
+        connect(addMemberAction, &QAction::triggered,
+                [this, groupIndex]() { addMemberToGroup(groupIndex); });
+
+        menu->addSeparator();
+    }
+
+    // Leave group option (for non-admins)
+    if (!isAdmin) {
+        QAction *leaveAction = menu->addAction("Leave Group");
+        connect(leaveAction, &QAction::triggered,
+                [this, groupIndex]() { leaveGroup(groupIndex); });
+    }
+
+    // Delete group option (admin only)
+    if (isAdmin) {
+        QAction *deleteAction = menu->addAction("Delete Group");
+        connect(deleteAction, &QAction::triggered,
+                [this, groupIndex]() { deleteGroup(groupIndex); });
+    }
+
+    menu->exec(QCursor::pos());
+    delete menu;
+}
+
+// Group member management
+void ChatPage::addMemberToGroup(int groupIndex) {
+    if (groupIndex < 0 || groupIndex >= groupList.size())
+        return;
+
+    GroupInfo &group = groupList[groupIndex];
+    Client *client = server::getInstance()->getCurrentClient();
+
+    if (!client || client->getUserId() != group.adminId) {
+        QMessageBox::warning(this, "Error",
+                             "Only the group admin can add members.");
+        return;
+    }
+
+    // Create a dialog to select users to add
+    QDialog *dialog = new QDialog(this);
+    dialog->setWindowTitle("Add Members to " + group.name);
+    dialog->setFixedSize(500, 600); // Increase size for better visibility
+    dialog->setStyleSheet("background-color: #1e1e2e;");
+
+    QVBoxLayout *dialogLayout = new QVBoxLayout(dialog);
+    dialogLayout->setContentsMargins(25, 25, 25, 25); // Increase margins
+    dialogLayout->setSpacing(20); // More spacing between elements
+
+    // Header
+    QLabel *headerLabel = new QLabel("Select users to add:");
+    headerLabel->setStyleSheet(
+        "color: white; font-size: 18px; font-weight: bold;"); // Larger text
+
+    // User list with checkboxes
+    QListWidget *userList = new QListWidget();
+    userList->setStyleSheet(R"(
+        QListWidget {
+            background-color: #2e2e3e;
+            border-radius: 8px;
+            color: white;
+            padding: 15px;  /* More padding */
+            border: none;
+        }
+        QListWidget::item {
+            padding: 12px;  /* More padding per item */
+            border-bottom: 1px solid #3e3e4e;
+            min-height: 40px;  /* Ensure minimum height */
+        }
+        QListWidget::item:selected {
+            background-color: #4e4e9e;
+        }
+        QCheckBox {
+            color: white;
+            font-size: 16px;  /* Larger font for better readability */
+            spacing: 10px;   /* More space between checkbox and text */
+        }
+    )");
+
+    // Get blocked users to exclude them
+    QVector<QString> blockedUsers =
+        server::getInstance()->getBlockedUsers(client->getUserId());
+    QSet<QString> blockedUsersSet;
+    for (const QString &blocked : blockedUsers) {
+        blockedUsersSet.insert(blocked);
+    }
+
+    // Create a set of existing members for quick lookup
+    QSet<QString> existingMembers;
+    for (const QString &member : group.members) {
+        existingMembers.insert(member);
+    }
+
+    // Add users who are not already in the group
+    bool hasEligibleUsers = false;
+    for (const UserInfo &user : this->userList) {
+        // Skip blocked users and existing members
+        if (blockedUsersSet.contains(user.email) ||
+            existingMembers.contains(user.email)) {
+            continue;
+        }
+
+        hasEligibleUsers = true;
+        QListWidgetItem *item = new QListWidgetItem(userList);
+        QWidget *itemWidget = new QWidget();
+        QHBoxLayout *itemLayout = new QHBoxLayout(itemWidget);
+        itemLayout->setContentsMargins(10, 10, 10, 10); // More padding
+        itemLayout->setSpacing(15); // More spacing between elements
+
+        // Create checkbox with the user's name
+        QCheckBox *checkbox = new QCheckBox(user.name);
+        checkbox->setProperty("userId", user.email);
+
+        // Optional: Add extra user info
+        QLabel *emailLabel = new QLabel("(" + user.email + ")");
+        emailLabel->setStyleSheet("color: #a0a0a0; font-size: 13px;");
+
+        // Add checkbox and email to layout
+        QVBoxLayout *userInfoLayout = new QVBoxLayout();
+        userInfoLayout->setContentsMargins(0, 0, 0, 0);
+        userInfoLayout->setSpacing(5);
+        userInfoLayout->addWidget(checkbox);
+        userInfoLayout->addWidget(emailLabel);
+
+        itemLayout->addLayout(userInfoLayout, 1);
+
+        // Set a minimum size to ensure item is large enough
+        itemWidget->setMinimumHeight(60);
+
+        item->setSizeHint(itemWidget->sizeHint());
+        userList->setItemWidget(item, itemWidget);
+    }
+
+    // Buttons
+    QPushButton *addButton = new QPushButton("Add Selected Users");
+    addButton->setStyleSheet(R"(
+        background-color: #4d6eaa;
+        color: white;
+        border-radius: 8px;
+        padding: 12px;
+        border: none;
+        font-size: 15px;
+        font-weight: bold;
+    )");
+
+    QPushButton *cancelButton = new QPushButton("Cancel");
+    cancelButton->setStyleSheet(R"(
+        background-color: #E15554;
+        color: white;
+        border-radius: 8px;
+        padding: 12px;
+        border: none;
+        font-size: 15px;
+    )");
+
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    buttonLayout->addWidget(cancelButton);
+    buttonLayout->addWidget(addButton);
+
+    // Add widgets to dialog
+    dialogLayout->addWidget(headerLabel);
+    dialogLayout->addWidget(userList);
+    dialogLayout->addLayout(buttonLayout);
+
+    // Connect buttons
+    connect(cancelButton, &QPushButton::clicked, dialog, &QDialog::reject);
+
+    // If no eligible users, show a message and disable the add button
+    if (!hasEligibleUsers) {
+        QLabel *noUsersLabel =
+            new QLabel("No eligible users to add. All users are either already "
+                        "in the group or blocked.");
+        noUsersLabel->setStyleSheet(
+            "color: white; font-size: 14px; padding: 20px; background-color: "
+            "#2e2e3e; border-radius: 8px;");
+        noUsersLabel->setWordWrap(true);
+        noUsersLabel->setAlignment(Qt::AlignCenter);
+
+        // Remove the user list and add the message
+        dialogLayout->removeWidget(userList);
+        delete userList;
+        dialogLayout->insertWidget(1, noUsersLabel);
+
+        addButton->setEnabled(false);
+        addButton->setStyleSheet(R"(
+            background-color: #6e6e8e;
+            color: white;
+            border-radius: 8px;
+            padding: 12px;
+            border: none;
+            font-size: 15px;
+            font-weight: bold;
+        )");
+    }
+
+    // Connect add button to add selected users
+    connect(
+        addButton, &QPushButton::clicked,
+        [this, dialog, userList, &group, groupIndex]() {
+            QStringList addedUsers;
+
+            // Collect selected users
+            for (int i = 0; i < userList->count(); i++) {
+                QListWidgetItem *item = userList->item(i);
+                QWidget *widget = userList->itemWidget(item);
+                QCheckBox *checkbox = widget->findChild<QCheckBox *>();
+
+                if (checkbox && checkbox->isChecked()) {
+                    QString userId = checkbox->property("userId").toString();
+                    if (!userId.isEmpty() && !group.members.contains(userId)) {
+                        group.members.append(userId);
+                        addedUsers.append(userId);
+                    }
+                }
+            }
+
+            if (addedUsers.isEmpty()) {
+                QMessageBox::information(dialog, "No Changes",
+                                        "No users were selected to add.");
+                return;
+            }
+
+            // Update the group in the database
+            if (saveGroupToDatabase(group)) {
+                // Add group to the new members' files
+                Client *client = server::getInstance()->getCurrentClient();
+                QString currentUserId = client ? client->getUserId() : "";
+
+                for (const QString &memberId : addedUsers) {
+                    // Create user's group directory
+                    QString userGroupDir =
+                        "../db/users/" + memberId + "/groups";
+                    QDir dir;
+                    if (!dir.exists(userGroupDir)) {
+                        dir.mkpath(userGroupDir);
+                    }
+
+                    // Save group info to a file for this user
+                    QFile groupFile(userGroupDir + "/" + group.groupId +
+                                    ".txt");
+                    if (groupFile.open(QIODevice::WriteOnly)) {
+                        QTextStream stream(&groupFile);
+                        stream << "GroupID: " << group.groupId << "\n";
+                        stream << "Name: " << group.name << "\n";
+                        stream << "AdminID: " << currentUserId << "\n";
+                        stream << "Members: ";
+                        for (int i = 0; i < group.members.size(); ++i) {
+                            stream << group.members[i];
+                            if (i < group.members.size() - 1) {
+                                stream << ",";
+                            }
+                        }
+                        stream << "\n";
+                        groupFile.close();
+
+                        qDebug() << "Added group info to user's directory:"
+                                << memberId;
+                    }
+                }
+
+                // Update UI if this is the current group
+                if (isInGroupChat && currentGroupId == groupIndex) {
+                    updateGroupChatArea(groupIndex);
+                }
+
+                QMessageBox::information(
+                    dialog, "Success",
+                    QString("Added %1 member(s) to the group.")
+                        .arg(addedUsers.size()));
+                dialog->accept();
+            } else {
+                QMessageBox::warning(
+                    dialog, "Error",
+                    "Failed to update group. Please try again.");
+            }
+        });
+
+    // Show dialog
+    dialog->exec();
+}
+
+void ChatPage::removeMemberFromGroup(int groupIndex, const QString &memberId) {
+    if (groupIndex < 0 || groupIndex >= groupList.size())
+        return;
+
+    GroupInfo &group = groupList[groupIndex];
+    Client *client = server::getInstance()->getCurrentClient();
+
+    if (!client || (client->getUserId() != group.adminId &&
+                    client->getUserId() != memberId)) {
+        QMessageBox::warning(this, "Error",
+                            "Only the group admin can remove members.");
+        return;
+    }
+
+    // Confirm removal
+    QMessageBox::StandardButton confirm = QMessageBox::question(
+        this, "Remove Member",
+        "Are you sure you want to remove this member from the group?",
+        QMessageBox::Yes | QMessageBox::No);
+
+    if (confirm != QMessageBox::Yes) {
+        return;
+    }
+
+    // Cannot remove the admin
+    if (memberId == group.adminId) {
+        QMessageBox::warning(this, "Error",
+                            "The group admin cannot be removed.");
+        return;
+    }
+
+    // Remove member from the list
+    group.members.removeOne(memberId);
+
+    // Update the group in the database
+    if (saveGroupToDatabase(group)) {
+        // Remove group from the member's files
+        QString userGroupFile =
+            "../db/users/" + memberId + "/groups/" + group.groupId + ".txt";
+        QFile::remove(userGroupFile);
+
+        // Update UI if this is the current group
+        if (isInGroupChat && currentGroupId == groupIndex) {
+            updateGroupChatArea(groupIndex);
+        }
+
+        QMessageBox::information(this, "Success",
+                                "Member has been removed from the group.");
+    } else {
+        QMessageBox::warning(this, "Error",
+                            "Failed to update group. Please try again.");
+    }
+}
+
+void ChatPage::leaveGroup(int groupIndex) {
+    if (groupIndex < 0 || groupIndex >= groupList.size())
+        return;
+
+    GroupInfo &group = groupList[groupIndex];
+    Client *client = server::getInstance()->getCurrentClient();
+
+    if (!client)
+        return;
+
+    QString currentUserId = client->getUserId();
+
+    // Confirm leaving
+    QMessageBox::StandardButton confirm = QMessageBox::question(
+        this, "Leave Group", "Are you sure you want to leave this group?",
+        QMessageBox::Yes | QMessageBox::No);
+
+    if (confirm != QMessageBox::Yes) {
+        return;
+    }
+
+    // If this user is the admin, ask if they want to delete the group
+    if (currentUserId == group.adminId) {
+        QMessageBox::StandardButton adminConfirm = QMessageBox::question(
+            this, "Delete Group",
+            "You are the admin of this group. Leaving will delete the group "
+            "for all members. Continue?",
+            QMessageBox::Yes | QMessageBox::No);
+
+        if (adminConfirm == QMessageBox::Yes) {
+            deleteGroup(groupIndex);
+            return;
+        } else {
+            return; // Don't leave if they don't want to delete
+        }
+    }
+
+    // Remove user from the group members
+    group.members.removeOne(currentUserId);
+
+    // Update the group in the database
+    if (saveGroupToDatabase(group)) {
+        // Remove group from user's files
+        QString userGroupFile = "../db/users/" + currentUserId + "/groups/" +
+                                group.groupId + ".txt";
+        QFile::remove(userGroupFile);
+
+        // Remove group from our list
+        groupList.removeAt(groupIndex);
+
+        // If messages vector exists for this group, remove it
+        if (groupIndex < groupMessages.size()) {
+            groupMessages.removeAt(groupIndex);
+        }
+
+        // Reset current group if we were viewing this group
+        if (isInGroupChat && currentGroupId == groupIndex) {
+            isInGroupChat = false;
+            currentGroupId = -1;
+            chatHeader->setText("Select a user");
+
+            // Clear messages
+            QLayoutItem *item;
+            while ((item = messageLayout->takeAt(0)) != nullptr) {
+                if (item->widget()) {
+                    delete item->widget();
+                }
+                delete item;
+            }
+            messageLayout->addStretch();
+        } else if (isInGroupChat && currentGroupId > groupIndex) {
+            // Adjust currentGroupId if needed
+            currentGroupId--;
+        }
+
+        // Update UI
+        updateUsersList();
+
+        QMessageBox::information(this, "Success", "You have left the group.");
+    } else {
+        QMessageBox::warning(this, "Error",
+                            "Failed to leave group. Please try again.");
+    }
+}
+
+void ChatPage::deleteGroup(int groupIndex) {
+    if (groupIndex < 0 || groupIndex >= groupList.size())
+        return;
+
+    GroupInfo &group = groupList[groupIndex];
+    Client *client = server::getInstance()->getCurrentClient();
+
+    if (!client || client->getUserId() != group.adminId) {
+        QMessageBox::warning(this, "Error",
+                            "Only the group admin can delete the group.");
+        return;
+    }
+
+    // Confirm deletion
+    QMessageBox::StandardButton confirm =
+        QMessageBox::question(this, "Delete Group",
+                            "Are you sure you want to delete this group? "
+                            "This action cannot be undone.",
+                            QMessageBox::Yes | QMessageBox::No);
+
+    if (confirm != QMessageBox::Yes) {
+        return;
+    }
+
+    // Remove group files for all members
+    for (const QString &memberId : group.members) {
+        QString userGroupFile =
+            "../db/users/" + memberId + "/groups/" + group.groupId + ".txt";
+        QFile::remove(userGroupFile);
+    }
+
+    // Remove group messages
+    QString groupMessagesDir = "../db/groups/" + group.groupId;
+    QDir dir(groupMessagesDir);
+    if (dir.exists()) {
+        dir.removeRecursively();
+    }
+
+    // Remove group from our list
+    groupList.removeAt(groupIndex);
+
+    // If messages vector exists for this group, remove it
+    if (groupIndex < groupMessages.size()) {
+        groupMessages.removeAt(groupIndex);
+    }
+
+    // Reset current group if we were viewing this group
+    if (isInGroupChat && currentGroupId == groupIndex) {
+        isInGroupChat = false;
+        currentGroupId = -1;
+        chatHeader->setText("Select a user");
+
+        // Clear messages
+        QLayoutItem *item;
+        while ((item = messageLayout->takeAt(0)) != nullptr) {
+            if (item->widget()) {
+                delete item->widget();
+            }
+            delete item;
+        }
+        messageLayout->addStretch();
+    } else if (isInGroupChat && currentGroupId > groupIndex) {
+        // Adjust currentGroupId if needed
+        currentGroupId--;
+    }
+
+    // Update UI
+    updateUsersList();
+
+    QMessageBox::information(this, "Success", "Group has been deleted.");
+}
+
+// Helper functions for groups
+void ChatPage::updateGroupsList() {
+    // This function is not needed separately since updateUsersList handles both
+    // users and groups We'll just call the updateUsersList function
+    updateUsersList();
+}
+
+void ChatPage::loadGroupMessagesForCurrentGroup() {
+    qDebug() << "Loading messages for group index:" << currentGroupId;
+
+    if (currentGroupId < 0 || currentGroupId >= groupList.size())
+        return;
+
     Client *client = server::getInstance()->getCurrentClient();
     if (!client)
         return;
-    
-    QString currentUserId = client->getUserId();
-    bool isAdmin = (group.adminId == currentUserId);
-    
-    // Populate members list
-    for (const QString &memberId : group.members) {
-        // Get user info
-        QString nickname, bio;
-        if (server::getInstance()->getUserSettings(memberId, nickname, bio)) {
-            QListWidgetItem *item = new QListWidgetItem(nickname);
-            item->setData(Qt::UserRole, memberId);
-            
-            // Highlight admin
-            if (memberId == group.adminId) {
-                item->setText(nickname + " (Admin)");
-                item->setForeground(QBrush(QColor("#4CAF50")));
+
+    const GroupInfo &group = groupList[currentGroupId];
+
+    // Clear existing messages to prevent duplication
+    // We assume groupMessages has already been resized properly by the caller
+    groupMessages[currentGroupId].clear();
+
+    // Load messages from the group's messages file
+    QFile file("../db/groups/" + group.groupId + "/messages/messages.txt");
+    if (file.exists() && file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream in(&file);
+        while (!in.atEnd()) {
+            QString line = in.readLine();
+            QStringList parts = line.split("|");
+
+            if (parts.size() >= 3) {
+                MessageInfo msgInfo;
+                msgInfo.sender = parts[0];
+                msgInfo.timestamp =
+                    QDateTime::fromString(parts[1], Qt::ISODate);
+                msgInfo.text = parts[2];
+                msgInfo.isFromMe = (msgInfo.sender == client->getUserId());
+
+                groupMessages[currentGroupId].append(msgInfo);
             }
-            
-            // Highlight current user
-            if (memberId == currentUserId) {
-                item->setText(item->text() + " (You)");
-                item->setForeground(QBrush(QColor("#65a9e0")));
-            }
-            
-            membersList->addItem(item);
-        } else {
-            // Fallback if user settings can't be retrieved
-            QListWidgetItem *item = new QListWidgetItem(memberId);
-            item->setData(Qt::UserRole, memberId);
-            membersList->addItem(item);
         }
+        file.close();
     }
-    
-    // Add buttons for group actions
-    QHBoxLayout *buttonLayout = new QHBoxLayout();
-    buttonLayout->setSpacing(10);
-    
-    QPushButton *closeButton = new QPushButton("Close");
-    closeButton->setStyleSheet(R"(
-        QPushButton {
-            background-color: #2e2e3e;
-            color: white;
-            border-radius: 8px;
-            padding: 10px 20px;
-            font-size: 15px;
-        }
-        QPushButton:hover {
-            background-color: #3e3e4e;
-        }
-    )");
-    
-    // Add member button (admin only)
-    QPushButton *addMemberButton = new QPushButton("Add Member");
-    addMemberButton->setStyleSheet(R"(
-        QPushButton {
-            background-color: #4d6eaa;
-            color: white;
-            border-radius: 8px;
-            padding: 10px 20px;
-            font-size: 15px;
-        }
-        QPushButton:hover {
-            background-color: #3d5e9a;
-        }
-    )");
-    addMemberButton->setEnabled(isAdmin);
-    
-    // Leave/Delete group button
-    QPushButton *leaveButton = new QPushButton(isAdmin ? "Delete Group" : "Leave Group");
-    leaveButton->setStyleSheet(R"(
-        QPushButton {
-            background-color: #E15554;
-            color: white;
-            border-radius: 8px;
-            padding: 10px 20px;
-            font-size: 15px;
-        }
-        QPushButton:hover {
-            background-color: #D14545;
-        }
-    )");
-    
-    buttonLayout->addWidget(closeButton);
-    buttonLayout->addWidget(addMemberButton);
-    buttonLayout->addWidget(leaveButton);
-    
-    // Add context menu for removing members (admin only)
-    if (isAdmin) {
-        membersList->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(membersList, &QListWidget::customContextMenuRequested, [this, membersList, groupIndex](const QPoint &pos) {
-            QListWidgetItem *selectedItem = membersList->itemAt(pos);
-            if (selectedItem) {
-                QString memberId = selectedItem->data(Qt::UserRole).toString();
-                
-                // Don't show remove option for admin
-                if (memberId == groupList[groupIndex].adminId)
-                    return;
-                
-                QMenu *contextMenu = new QMenu(this);
-                QAction *removeAction = new QAction("Remove from Group", this);
-                
-                connect(removeAction, &QAction::triggered, [this, groupIndex, memberId]() {
-                    removeMemberFromGroup(groupIndex, memberId);
-                });
-                
-                contextMenu->addAction(removeAction);
-                contextMenu->exec(membersList->mapToGlobal(pos));
-            }
-        });
-    }
-    
-    // Add widgets to dialog layout
-    dialogLayout->addWidget(groupNameLabel);
-    dialogLayout->addWidget(membersCountLabel);
-    dialogLayout->addWidget(membersLabel);
-    dialogLayout->addWidget(membersList);
-    dialogLayout->addLayout(buttonLayout);
-    
-    // Connect buttons
-    connect(closeButton, &QPushButton::clicked, optionsDialog, &QDialog::accept);
-    
-    connect(addMemberButton, &QPushButton::clicked, [this, optionsDialog, groupIndex]() {
-        optionsDialog->accept();
-        addMemberToGroup(groupIndex);
-    });
-    
-    connect(leaveButton, &QPushButton::clicked, [this, optionsDialog, groupIndex, isAdmin]() {
-        optionsDialog->accept();
-        if (isAdmin) {
-            deleteGroup(groupIndex);
-        } else {
-            leaveGroup(groupIndex);
-        }
-    });
-    
-    // Show dialog
-    openDialog(optionsDialog);
+
+    qDebug() << "Loaded" << groupMessages[currentGroupId].size()
+             << "messages for group" << group.groupId;
 }
 
-/*
- * Contributor: Hossam
- * Function: updateGroupsList
- * Description: Updates the user list to show both users and groups.
- * This function ensures groups are displayed alongside users in the sidebar.
- */
-void ChatPage::updateGroupsList() {
-    // First clear the list
-    usersListWidget->clear();
-    
-    // Add the "Create Group" item at the top
-    QListWidgetItem *createGroupItem = new QListWidgetItem();
-    createGroupItem->setData(Qt::UserRole + 2, false); // Not a group
-    createGroupItem->setData(Qt::UserRole + 3, true);  // Special item
-    usersListWidget->addItem(createGroupItem);
-    
-    // Create widget for the "Create Group" item
-    QWidget *createGroupWidget = new QWidget();
-    QHBoxLayout *createGroupLayout = new QHBoxLayout(createGroupWidget);
-    createGroupLayout->setContentsMargins(10, 5, 10, 5);
-    
-    QLabel *plusIcon = new QLabel("+");
-    plusIcon->setFixedSize(40, 40);
-    plusIcon->setAlignment(Qt::AlignCenter);
-    plusIcon->setStyleSheet("background-color: #4d6eaa; border-radius: 20px; color: white; font-size: 24px; font-weight: bold;");
-    
-    QLabel *createGroupLabel = new QLabel("Create New Group");
-    createGroupLabel->setStyleSheet("color: white; font-size: 16px;");
-    
-    createGroupLayout->addWidget(plusIcon);
-    createGroupLayout->addWidget(createGroupLabel);
-    
-    usersListWidget->setItemWidget(createGroupItem, createGroupWidget);
-    
-    // Add existing groups
-    for (int i = 0; i < groupList.size(); i++) {
-        QListWidgetItem *item = createGroupListItem(groupList[i], i);
-        usersListWidget->addItem(item);
+bool ChatPage::saveGroupToDatabase(const GroupInfo &group) {
+    // Create groups directory if it doesn't exist
+    QDir dir;
+    if (!dir.exists("../db/groups")) {
+        dir.mkpath("../db/groups");
+    }
+
+    if (!dir.exists("../db/groups/" + group.groupId)) {
+        dir.mkpath("../db/groups/" + group.groupId);
+    }
+
+    // Update group info in each member's directory
+    for (const QString &memberId : group.members) {
+        QString userGroupDir = "../db/users/" + memberId + "/groups";
+        if (!dir.exists(userGroupDir)) {
+            dir.mkpath(userGroupDir);
+        }
+
+        // Save group info to a file for this user
+        QFile groupFile(userGroupDir + "/" + group.groupId + ".txt");
+        if (groupFile.open(QIODevice::WriteOnly)) {
+            QTextStream stream(&groupFile);
+            stream << "GroupID: " << group.groupId << "\n";
+            stream << "Name: " << group.name << "\n";
+            stream << "AdminID: " << group.adminId << "\n";
+            stream << "Members: ";
+            for (int i = 0; i < group.members.size(); ++i) {
+                stream << group.members[i];
+                if (i < group.members.size() - 1) {
+                    stream << ",";
+                }
+            }
+            stream << "\n";
+            groupFile.close();
+        } else {
+            qDebug() << "Failed to save group info for user:" << memberId;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool ChatPage::loadGroupImage(GroupInfo &group) {
+    // Check if group has a custom image
+    QString imagePath = "../db/groups/" + group.groupId + "/image.png";
+    QFile imageFile(imagePath);
+
+    if (imageFile.exists()) {
+        QPixmap image(imagePath);
+        if (!image.isNull()) {
+            group.groupImage = image;
+            group.hasCustomImage = true;
+            return true;
+        }
+    }
+
+    group.hasCustomImage = false;
+    return false;
+}
+
+void ChatPage::addGroupMessageToUI(const QString &text, const QString &senderId,
+                                    const QDateTime &timestamp) {
+    QWidget *bubbleRow = new QWidget();
+    QHBoxLayout *rowLayout = new QHBoxLayout(bubbleRow);
+    rowLayout->setContentsMargins(10, 3, 10, 3);
+
+    Client *client = server::getInstance()->getCurrentClient();
+    bool isFromMe = client && senderId == client->getUserId();
+
+    // Get sender's name
+    QString senderName = senderId;
+    QString nickname, bio;
+    if (server::getInstance()->getUserSettings(senderId, nickname, bio)) {
+        if (!nickname.isEmpty()) {
+            senderName = nickname;
+        } else {
+            // Extract username from email if possible
+            if (senderId.contains("@")) {
+                senderName = senderId.split("@").first();
+            }
+        }
+    }
+
+    // Create message content widget
+    QWidget *bubbleContent = new QWidget();
+    QVBoxLayout *contentLayout = new QVBoxLayout(bubbleContent);
+    contentLayout->setContentsMargins(12, 8, 12, 8);
+    contentLayout->setSpacing(5);
+
+    // Show sender name at the top of the message
+    QLabel *senderLabel = new QLabel(senderName);
+    senderLabel->setStyleSheet(
+        QString("color: %1; font-size: 12px; font-weight: bold;")
+            .arg(isFromMe ? "#7a5ca3" : "#4d6eaa"));
+    contentLayout->addWidget(senderLabel);
+
+    // Create message text and timestamp
+    QLabel *messageText = new QLabel(text);
+    messageText->setWordWrap(true);
+    messageText->setTextFormat(Qt::TextFormat::PlainText);
+    messageText->setStyleSheet("color: #000000; font-size: 14px;");
+
+    QString timeStr = timestamp.toString("hh:mm");
+    QLabel *timestampLabel = new QLabel(timeStr);
+    timestampLabel->setStyleSheet(
+        "font-size: 10px; color: #666666; margin: 0px 4px;");
+    timestampLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+
+    // Add text and timestamp in a horizontal layout
+    QHBoxLayout *textLayout = new QHBoxLayout();
+    textLayout->setContentsMargins(0, 0, 0, 0);
+    textLayout->setSpacing(5);
+    textLayout->addWidget(messageText);
+    textLayout->addWidget(timestampLabel, 0, Qt::AlignBottom);
+
+    contentLayout->addLayout(textLayout);
+
+    // Style the bubble
+    QString bubbleColor = isFromMe ? "#DCF8C6" : "#FFFFFF";
+    QString borderRadiusStyle =
+        isFromMe ? "border-top-right-radius: 18px; border-top-left-radius: "
+                    "18px; border-bottom-left-radius: 18px; "
+                    "border-bottom-right-radius: 4px;"
+                : "border-top-left-radius: 18px; border-top-right-radius: "
+                    "18px; border-bottom-right-radius: 18px; "
+                    "border-bottom-left-radius: 4px;";
+    bubbleContent->setStyleSheet(QString(R"(
+        background-color: %1;
+        %2
+        padding: 8px;
+    )")
+                                    .arg(bubbleColor)
+                                    .arg(borderRadiusStyle));
+
+    bubbleContent->setMaximumWidth(500);
+    bubbleContent->setProperty("isFromMe", isFromMe);
+    bubbleContent->setProperty("messageText", text);
+    bubbleContent->setProperty("timestamp", timestamp);
+    bubbleContent->setProperty("sender", senderId);
+    bubbleContent->installEventFilter(this);
+
+    // Position the bubble
+    if (isFromMe) {
+        rowLayout->addStretch();
+        rowLayout->addWidget(bubbleContent, 0, Qt::AlignRight);
+    } else {
+        rowLayout->addWidget(bubbleContent, 0, Qt::AlignLeft);
+        rowLayout->addStretch();
+    }
+
+    // Add to layout
+    messageLayout->insertWidget(messageLayout->count() - 1, bubbleRow);
+}
+
+// New method to mark messages as read
+void ChatPage::markMessagesAsRead(int userIndex) {
+    if (userIndex < 0 || userIndex >= userList.size()) {
+        return;
+    }
+
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client) {
+        return;
+    }
+
+    QString senderId = client->getUserId();
+    QString recipientId = userList[userIndex].email;
+    QString roomId = Room::generateRoomId(senderId, recipientId);
+    Room *room = client->getRoom(roomId);
+            
+    if (room) {
+        bool messagesMarkedAsRead = false;
+        
+        // Get all messages and mark unread ones from the other user as read
+        QList<Message> messages = room->getMessages();
+        QList<Message> updatedMessages;
+        
+        for (Message msg : messages) {
+            // If this message is from the other user and not read yet
+            if (msg.getSender() == recipientId && !msg.getReadStatus()) {
+                msg.markAsRead();
+                messagesMarkedAsRead = true;
+            }
+            updatedMessages.append(msg);
+        }
+        
+        if (messagesMarkedAsRead) {
+            // Update the room with the modified messages
+            room->setMessages(updatedMessages);
+            
+            // Save the changes to the server and persist
+            server::getInstance()->setMessageListFromVector(roomId, room->getMessagesAsVector());
+            room->saveMessages();
+            
+            qDebug() << "Marked messages as read in room:" << roomId;
+        }
+    }
+}
+
+// Add a method to update read receipts for sent messages
+void ChatPage::updateReadReceipts() {
+    if (currentUserId < 0 || currentUserId >= userList.size()) {
+        return;
     }
     
-    // Then add users as we normally do
-    for (int i = 0; i < userList.size(); i++) {
-        QListWidgetItem *item = createUserListItem(userList[i], i);
-        usersListWidget->addItem(item);
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client) {
+        return;
     }
     
-    // Update UI after adding items
-    usersListWidget->update();
+    QString senderId = client->getUserId();
+    QString recipientId = userList[currentUserId].email;
+    QString roomId = Room::generateRoomId(senderId, recipientId);
+    Room *room = client->getRoom(roomId);
+    
+    if (!room) {
+        return;
+    }
+    
+    // Get all message widgets in current chat
+    for (int i = 0; i < messageLayout->count(); i++) {
+        QLayoutItem *item = messageLayout->itemAt(i);
+        if (!item || !item->widget()) {
+            continue;
+        }
+        
+        QWidget *bubbleRow = item->widget();
+        QList<QWidget*> bubbles = bubbleRow->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+        
+        for (QWidget *bubble : bubbles) {
+            // Check if this is a sent message
+            if (bubble->property("isFromMe").toBool()) {
+                QDateTime timestamp = bubble->property("timestamp").toDateTime();
+                bool currentReadStatus = bubble->property("isRead").toBool();
+                
+                // Find this message in the room to check its current read status
+                QList<Message> messages = room->getMessages();
+                for (const Message &msg : messages) {
+                    if (msg.getTimestamp() == timestamp && msg.getSender() == senderId) {
+                        // If read status has changed, update the UI
+                        if (msg.getReadStatus() != currentReadStatus) {
+                            // Find the read receipt label
+                            QList<QLabel*> labels = bubble->findChildren<QLabel*>();
+                            for (QLabel *label : labels) {
+                                if (label->text() == "✓✓") {
+                                    // Update read receipt appearance
+                                    if (msg.getReadStatus()) {
+                                        label->setStyleSheet("font-size: 12px; color: #4169E1;"); // Blue for read
+                                    } else {
+                                        label->setStyleSheet("font-size: 12px; color: #A0A0A0;"); // Gray for delivered
+                                    }
+                                    break;
+                                }
+                            }
+                            
+                            // Update the property
+                            bubble->setProperty("isRead", msg.getReadStatus());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Add these missing method implementations after refreshOnlineStatus()
+void ChatPage::forceRefreshOnlineStatus() {
+    // Force an immediate refresh of online status for all users
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+
+    // Call the refresh method directly
+    refreshOnlineStatus();
+
+    QApplication::restoreOverrideCursor();
+
+    // Give visual feedback in the chat header if a chat is open
+    if (currentUserId >= 0 && currentUserId < userList.size()) {
+        QString originalText = chatHeader->text();
+        chatHeader->setText("Refreshing online status...");
+
+        // Reset the header after a short delay
+        QTimer::singleShot(1000, this, [this, originalText]() {
+            chatHeader->setText(originalText);
+        });
+    }
+
+    qDebug() << "Forced refresh of online status for all users";
+}
+
+void ChatPage::startStatusUpdateTimer() {
+    if (onlineStatusTimer) {
+        if (!onlineStatusTimer->isActive()) {
+            onlineStatusTimer->start(3000); // 3 seconds
+            qDebug() << "Started online status timer";
+        }
+    }
+}
+
+void ChatPage::stopStatusUpdateTimer() {
+    if (onlineStatusTimer) {
+        if (onlineStatusTimer->isActive()) {
+            onlineStatusTimer->stop();
+            qDebug() << "Stopped online status timer";
+        }
+    }
+}
+
+void ChatPage::updateProfileAvatar() {
+    if (!profileAvatar)
+        return;
+
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client)
+        return;
+
+    QString userId = client->getUserId();
+
+    // Always reload the avatar from disk to ensure we get the latest version
+    userSettings.hasCustomAvatar = false; // Force reload
+    loadAvatarImage();
+
+    // If we have a custom avatar, use it
+    if (userSettings.hasCustomAvatar && !userSettings.avatarImage.isNull()) {
+        // Create a circular label with the avatar image
+        int size = profileAvatar->width();
+        QPixmap scaledAvatar = userSettings.avatarImage.scaled(
+            size, size, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+
+        // Create a new circular mask
+        QPixmap circularAvatar(scaledAvatar.size());
+        circularAvatar.fill(Qt::transparent);
+
+        QPainter painter(&circularAvatar);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+
+        QPainterPath path;
+        path.addEllipse(0, 0, scaledAvatar.width(), scaledAvatar.height());
+        painter.setClipPath(path);
+        painter.drawPixmap(0, 0, scaledAvatar);
+        painter.end();
+
+        // Set the avatar image
+        profileAvatar->setPixmap(circularAvatar);
+        profileAvatar->setStyleSheet(
+            "border-radius: 25px; border: 2px solid #23233a;");
+        qDebug() << "Updated profile avatar to show custom image for user:"
+                 << userId;
+    } else {
+        // Fallback to text-based avatar if no image available
+        QString nickname, bio;
+
+        // Get current user's nickname
+        if (server::getInstance()->getUserSettings(userId, nickname, bio) &&
+            !nickname.isEmpty()) {
+            // Use the first letter of nickname if available
+            profileAvatar->setText(nickname.left(1).toUpper());
+        } else {
+            // Fallback to username
+            profileAvatar->setText(client->getUsername().left(1).toUpper());
+        }
+
+        // Style the text-based avatar
+        QString gradientColors =
+            "stop:0 #4d6eaa, stop:1 #7a5ca3"; // Blue to purple gradient for
+                                              // current user
+        profileAvatar->setStyleSheet(QString(R"(
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, %1);
+            color: white;
+            border-radius: 25px;
+            font-weight: bold;
+            font-size: 22px;
+            border: 2px solid #23233a;
+        )")
+                                         .arg(gradientColors));
+
+        qDebug() << "Updated profile avatar to show text-based avatar for user:"
+                 << userId;
+    }
+
+    // Also update the status indicator
+    bool isOnline = server::getInstance()->isUserOnline(userId);
+    if (profileStatusIndicator) {
+        profileStatusIndicator->setStyleSheet(
+            QString(R"(
+            background-color: %1;
+            border-radius: 6px;
+            border: 1px solid #23233a;
+        )")
+                .arg(isOnline
+                         ? "#4CAF50"
+                         : "#9E9E9E")); // Green for online, gray for offline
+    }
+}
+
+bool ChatPage::loadAvatarImage() {
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client) {
+        qDebug() << "Cannot load avatar: No active client";
+        return false;
+    }
+
+    QString userId = client->getUserId();
+    QString nickname, bio, avatarPath;
+
+    // Get avatar path from server
+    if (server::getInstance()->getUserSettings(userId, nickname, bio,
+                                               avatarPath) &&
+        !avatarPath.isEmpty()) {
+        // Create a fresh QPixmap instance each time to prevent sharing
+        QPixmap avatar(avatarPath);
+
+        if (!avatar.isNull()) {
+            // Make a deep copy of the pixmap to ensure we have a completely new
+            // instance
+            userSettings.avatarImage = QPixmap(avatar);
+            userSettings.hasCustomAvatar = true;
+            qDebug() << "Loaded avatar image from:" << avatarPath
+                     << "for user:" << userId;
+            return true;
+        } else {
+            qDebug() << "Failed to load avatar image from:" << avatarPath
+                     << "for user:" << userId;
+        }
+    }
+
+    // If no avatar or loading failed
+    userSettings.hasCustomAvatar = false;
+    userSettings.avatarImage = QPixmap(); // Clear any existing avatar
+    qDebug() << "No avatar image found for user:" << userId;
+    return false;
+}
+
+bool ChatPage::saveAvatarImage(const QPixmap &image) {
+    if (image.isNull()) {
+        qDebug() << "Cannot save null avatar image";
+        return false;
+    }
+
+    Client *client = server::getInstance()->getCurrentClient();
+    if (!client) {
+        qDebug() << "Cannot save avatar: No active client";
+        return false;
+    }
+
+    QString userId = client->getUserId();
+
+    // Clean up old avatar files for this user
+    QDir avatarsDir("../db/avatars");
+    if (avatarsDir.exists()) {
+        // Get all files matching userId prefix
+        QStringList nameFilters;
+        nameFilters << userId + "_*.png" << userId + "_*.jpg"
+                    << userId + "_*.jpeg" << userId + "_*.bmp";
+        QStringList oldAvatars = avatarsDir.entryList(nameFilters, QDir::Files);
+
+        qDebug() << "Found" << oldAvatars.size() << "old avatar files for user"
+                 << userId;
+
+        // Delete old avatar files
+        for (const QString &oldFile : oldAvatars) {
+            if (avatarsDir.remove(oldFile)) {
+                qDebug() << "Deleted old avatar file:" << oldFile;
+            } else {
+                qDebug() << "Failed to delete old avatar file:" << oldFile;
+            }
+        }
+    }
+    
+    // Create avatars directory if it doesn't exist
+    QDir dir;
+    if (!dir.exists("../db/avatars")) {
+        dir.mkpath("../db/avatars");
+    }
+
+    // Create a unique filename based on userId and timestamp
+    QString avatarFilename =
+        "../db/avatars/" + userId + "_" +
+        QString::number(QDateTime::currentDateTime().toSecsSinceEpoch()) +
+        ".png";
+
+    // Save image to file
+    if (image.save(avatarFilename, "PNG")) {
+        // Update server data with new avatar path
+        if (server::getInstance()->updateUserAvatar(userId, avatarFilename)) {
+            // Update local data
+            userSettings.avatarImage = image;
+            userSettings.hasCustomAvatar = true;
+
+            qDebug() << "Avatar saved to:" << avatarFilename;
+            return true;
+        } else {
+            // Remove the file if server update failed
+            QFile::remove(avatarFilename);
+            qDebug() << "Failed to update avatar path in server";
+        }
+    } else {
+        qDebug() << "Failed to save avatar image to:" << avatarFilename;
+    }
+    
+    return false;
+}
+
+void ChatPage::changeAvatar() {
+    // Open file dialog to select image
+    QString filePath = QFileDialog::getOpenFileName(
+        this, tr("Select Avatar Image"), QDir::homePath(),
+        tr("Image Files (*.png *.jpg *.jpeg *.bmp)"));
+
+    if (filePath.isEmpty()) {
+        return; // User canceled
+    }
+
+    // Load the selected image
+    QPixmap originalImage(filePath);
+    if (originalImage.isNull()) {
+        QMessageBox::warning(this, tr("Error"),
+                             tr("Failed to load the selected image."));
+        return;
+    }
+
+    // Resize if too large (max 200x200)
+    QPixmap scaledImage;
+    if (originalImage.width() > 200 || originalImage.height() > 200) {
+        scaledImage = originalImage.scaled(200, 200, Qt::KeepAspectRatio,
+                                           Qt::SmoothTransformation);
+    } else {
+        scaledImage = originalImage;
+    }
+
+    // Make the image square with a circular mask
+    int size = qMin(scaledImage.width(), scaledImage.height());
+    QPixmap squareImage(size, size);
+    squareImage.fill(Qt::transparent);
+
+    QPainter painter(&squareImage);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+
+    // Create circular mask
+    QPainterPath path;
+    path.addEllipse(0, 0, size, size);
+    painter.setClipPath(path);
+
+    // Draw the image centered in the square
+    int x = (size - scaledImage.width()) / 2;
+    int y = (size - scaledImage.height()) / 2;
+    painter.drawPixmap(x, y, scaledImage);
+    painter.end();
+
+    // Save the processed image
+    if (saveAvatarImage(squareImage)) {
+        // Update profile avatar
+        updateProfileAvatar();
+
+        // Update avatar preview in settings
+        if (avatarPreview) {
+            QPixmap previewAvatar = squareImage.scaled(
+                avatarPreview->width(), avatarPreview->height(),
+                Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            avatarPreview->setPixmap(previewAvatar);
+            avatarPreview->setStyleSheet(
+                "border-radius: 50px; border: 2px solid #23233a;");
+        }
+
+        // Force an immediate UI refresh by updating users list
+        QMessageBox::information(this, tr("Success"),
+                                 tr("Avatar has been updated successfully."));
+
+        // Schedule multiple refreshes to ensure all UI elements are updated
+        QTimer::singleShot(100, this, &ChatPage::forceRefreshOnlineStatus);
+        QTimer::singleShot(500, this, &ChatPage::forceRefreshOnlineStatus);
+        QTimer::singleShot(1000, this, &ChatPage::forceRefreshOnlineStatus);
+    } else {
+        QMessageBox::warning(this, tr("Error"),
+                             tr("Failed to save the avatar image."));
+    }
 }

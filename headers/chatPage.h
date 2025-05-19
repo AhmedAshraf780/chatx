@@ -33,13 +33,6 @@
 #include <QDialog>
 #include <QFileDialog>
 #include <QMetaType>
-
-// STL includes
-#include <list>
-#include <stack>
-#include <string>
-#include <memory>
-
 #include "../server/server.h"
 
 // Forward declarations
@@ -55,26 +48,6 @@ class QEvent;
 class QTextEdit;
 class QCheckBox;
 class QTimer;
-
-// Navigation state enum for history tracking
-enum class NavigationState {
-    MAIN_CHAT,
-    USER_PROFILE,
-    GROUP_CHAT,
-    SETTINGS,
-    STORY_VIEW,
-    CHATS,         // Added for navigation buttons
-    STORIES,       // Added for navigation buttons
-    BLOCKED_USERS, // Added for blocked users view
-    CHAT_DETAIL,   // Added for specific chat view
-    GROUP_DETAIL   // Added for specific group view
-};
-
-// Navigation entry for history
-struct NavigationEntry {
-    NavigationState state;
-    std::string identifier; // userId, groupId, etc.
-};
 
 // User info structure
 struct UserInfo {
@@ -146,7 +119,6 @@ private slots:
     void logout(); // Method to handle logout
     void saveUserSettings(); // Method to save user settings
     void changePassword(); // Method to handle password changes
-    void deleteUserAccount(); // Method to delete user account
     void onlineStatusChanged(int state); // Handle online/offline toggle
     void refreshOnlineStatus(); // Periodically refresh online status of users
     void updateUsersList();
@@ -154,6 +126,7 @@ private slots:
     void handleUserSelected(int row);
     void sendMessage();
     void changeAvatar(); // Method to handle avatar change request
+    void displayLatestMessage(int userIndex); // Display the latest message using stack's top function
     
     // User interaction slots
     void showMessageOptions(QWidget *bubble);
@@ -182,48 +155,41 @@ private slots:
     void leaveGroup(int groupIndex);
     void deleteGroup(int groupIndex);
     
-    // Navigation history slots
-    void goBack(); // Go back in navigation history
-    void navigateToState(NavigationState state, const QString &identifier = ""); // Navigate to a state
-    
-    // Dialog management slots
-    void openDialog(QDialog* dialog); // Open a dialog
-    void closeTopDialog(); // Close the top dialog
+    // Message read status methods
+    void markMessagesAsRead(int userIndex); // Mark messages from other user as read
+    void updateReadReceipts(); // Update read receipt indicators in UI
 
 private:
-    // UI elements
-    QStackedWidget *contentStack;
-    QLabel *chatHeader;
+    // UI Elements
+    QListWidget *usersListWidget;
+    QLineEdit *searchInput;
+    QLineEdit *messageInput;
     QScrollArea *messageArea;
     QVBoxLayout *messageLayout;
-    QLineEdit *messageInput;
-    QLineEdit *searchInput;
-    QPushButton *sendButton;
-    QListWidget *usersListWidget;
-    QWidget *usersSidebar;
-    QVector<QPushButton *> navButtons;
-    QCheckBox *onlineStatusCheckbox;
-    QLabel *profileAvatar;
-    QLabel *profileStatusIndicator;
-    QLabel *avatarPreview;
+    QLabel *chatHeader;
+    QStackedWidget *contentStack;
+    QVector<QPushButton*> navButtons;
+    QWidget *usersSidebar; // Add reference to users sidebar widget
     
     // Settings UI Elements
     QLineEdit *nicknameEdit;
     QTextEdit *bioEdit;
+    QCheckBox *onlineStatusCheckbox;
+    QLabel *avatarPreview; // Avatar preview in settings
     
     // Password change UI elements
     QLineEdit *currentPasswordEdit;
     QLineEdit *newPasswordEdit;
     QLineEdit *confirmPasswordEdit;
     
+    // Profile UI Elements
+    QLabel *profileAvatar;
+    QLabel *profileStatusIndicator;
+    
     // Stories UI Elements
     QHBoxLayout *storyWidgetsLayout; // Layout for story circles at the top
     QVBoxLayout *storiesFeedLayout;  // Layout for story feed items
     QVector<StoryInfo> userStories;  // Vector to store all stories
-    
-    // STL containers (college requirement)
-    std::list<NavigationEntry> navigationHistory; // 3. STL list for navigation history
-    std::stack<std::shared_ptr<QDialog>> dialogStack; // 5. STL stack for dialog management
     
     // Timer for refreshing online status
     QTimer *onlineStatusTimer;
@@ -241,7 +207,7 @@ private:
 
     // Group chat member variables
     QVector<GroupInfo> groupList;
-    QVector<QVector<MessageInfo>> groupMessages;
+    QVector<QList<MessageInfo>> groupMessages;
     int currentGroupId;
     bool isInGroupChat;
 
@@ -260,9 +226,6 @@ private:
     void updateProfileAvatar(); // Update the profile avatar with current user's info
     bool saveAvatarImage(const QPixmap &image); // Save avatar image to file
     bool loadAvatarImage(); // Load avatar image from file
-    
-    // Helper for finding group index by ID
-    int findGroupIndex(const QString &groupId) const;
     
     // Story helper methods
     QWidget* createStoryCircle(const StoryInfo &story); // Create a story circle UI element

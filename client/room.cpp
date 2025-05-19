@@ -4,43 +4,25 @@
 #include <QDir>
 #include <QDebug>
 
-/*
- * Contributor: Qobesy
- * Function: generateRoomId
- * Description: Creates a consistent room ID for two users regardless of the order.
- * Sorts user IDs alphabetically to ensure the same room ID is generated
- * whether user1 contacts user2 or vice versa.
- */
 QString Room::generateRoomId(const QString& user1, const QString& user2) {
     // Ensure we have complete email addresses
+    qDebug() << "Generating room ID for users:" << user1 << "and" << user2;
     
-    // Normalize user IDs to ensure they're complete email addresses
-    QString normalizedUser1 = user1;
-    QString normalizedUser2 = user2;
-    
-    // Check if email addresses are complete - but don't add @gmail.com suffix
-    // as it may cause inconsistency with how users are saved in the database
-    
+    // No need to normalize - we should always be getting email addresses
     // Sort the user IDs to ensure consistent room ID regardless of order
-    QString roomId = normalizedUser1 < normalizedUser2 ? 
-                    normalizedUser1 + "_" + normalizedUser2 : 
-                    normalizedUser2 + "_" + normalizedUser1;
+    QString roomId = user1 < user2 ? 
+                    user1 + "_" + user2 : 
+                    user2 + "_" + user1;
     
+    qDebug() << "Generated room ID:" << roomId;
     return roomId;
 }
 
-/*
- * Contributor: Qobesy
- * Function: Room constructor
- * Description: Creates a new room with the given name.
- * Extracts user IDs from the room name and generates a consistent room ID.
- * Sets the last activity timestamp to the current time.
- */
 Room::Room(const QString& name) : name(name) {
     // Extract user IDs from the room name
     QStringList userIds = name.split("_");
     if (userIds.size() == 2) {
-        // Use the sorted user IDs to ensure consistency
+        // Use the sorted user IDs directly as the room ID
         roomId = generateRoomId(userIds[0], userIds[1]);
     } else {
         // Fallback if name format is unexpected
@@ -49,56 +31,92 @@ Room::Room(const QString& name) : name(name) {
     lastActivity = QDateTime::currentDateTime();
 }
 
-/*
- * Contributor: Qobesy
- * Function: addMessage
- * Description: Adds a new message to the room if it doesn't already exist.
- * Updates the last activity timestamp to the current time.
- */
-void Room::addMessage(const Message& msg) {
-    // Check if the message already exists in memory
-    if (!messages.contains(msg)) {
-        messages.append(msg);
-        lastActivity = QDateTime::currentDateTime();
+// Convert QVector to QList and set messages
+void Room::setMessages(const QVector<Message>& msgs) {
+    messages.clear();
+    
+    // Add messages in chronological order to the list
+    for (int i = 0; i < msgs.size(); i++) {
+        messages.append(msgs.at(i));
     }
 }
 
-/*
- * Contributor: Qobesy
- * Function: removeMessage
- * Description: Removes a message at the specified index from the room's message list.
- */
+// Convert messages list to vector for compatibility
+QVector<Message> Room::getMessagesAsVector() const {
+    QVector<Message> result;
+    
+    // Simply copy from list to vector (already in chronological order)
+    for (const Message& msg : messages) {
+        result.append(msg);
+    }
+    
+    return result;
+}
+
+// Get the latest message
+Message Room::getLatestMessage() const {
+    if (!messages.isEmpty()) {
+        return messages.last();  // Return last message (newest) in the list
+    }
+    return Message(); // Return empty message if list is empty
+}
+
+void Room::addMessage(const Message& msg) {
+    // Add new message to the end of the list
+    messages.append(msg);
+    lastActivity = QDateTime::currentDateTime();
+}
+
 void Room::removeMessage(int index) {
     if (index >= 0 && index < messages.size()) {
         messages.removeAt(index);
     }
 }
 
-/*
- * Contributor: Qobesy
- * Function: clearMessages
- * Description: Safely clears all messages from the room.
- * Creates a new empty vector to replace the existing messages collection.
- */
 void Room::clearMessages() {
-    // Safely clear messages
-    messages = QVector<Message>(); // Replace with a new, empty vector
+    messages.clear();
 }
 
-/*
- * Contributor: Qobesy
- * Function: loadMessages
- * Description: Loads messages from the room's file into memory.
- * Reads each line, parses it into a Message object, and adds it to the messages collection.
- */
 void Room::loadMessages() {
     messages.clear(); // Clear existing messages to avoid duplicates
 
+    // Make sure roomId is clean (no whitespace)
+    roomId = roomId.trimmed();
+    
+    // First attempt with the direct room ID
     QString roomFile = "../db/rooms/" + roomId + ".txt";
     QFile file(roomFile);
+    
+    // If the file doesn't exist directly, try a case-insensitive search
+    if (!file.exists()) {
+        qDebug() << "Room file not found directly:" << roomFile;
+        QDir roomsDir("../db/rooms");
+        QStringList roomFiles = roomsDir.entryList(QDir::Files);
+        
+        bool foundFile = false;
+        for (const QString &possibleFile : roomFiles) {
+            QString fileId = possibleFile;
+            if (fileId.endsWith(".txt")) fileId.chop(4);
+            
+            if (fileId.compare(roomId, Qt::CaseInsensitive) == 0) {
+                roomFile = "../db/rooms/" + possibleFile;
+                qDebug() << "Found room file with case-insensitive match:" << possibleFile;
+                foundFile = true;
+                file.setFileName(roomFile);
+                break;
+            }
+        }
+        
+        if (!foundFile) {
+            qDebug() << "WARNING: No matching room file found for ID:" << roomId;
+        }
+    }
+
+    qDebug() << "Loading messages from file:" << roomFile;
 
     if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         QTextStream in(&file);
+        
         while (!in.atEnd()) {
             QString line = in.readLine().trimmed();
             if (!line.isEmpty()) {
@@ -107,123 +125,45 @@ void Room::loadMessages() {
             }
         }
         file.close();
+        
+        qDebug() << "Loaded" << messages.size() << "messages from file";
     } else {
+        qDebug() << "Failed to open file for reading:" << file.errorString();
     }
 }
 
-/*
- * Contributor: Qobesy
- * Function: updateLastActivity
- * Description: Updates the room's last activity timestamp to the current time.
- * Used when a new action occurs in the room, such as sending a message.
- */
 void Room::updateLastActivity() {
     lastActivity = QDateTime::currentDateTime();
 }
 
-/*
- * Contributor: Qobesy
- * Function: saveMessages
- * Description: Saves all messages in the room to a persistent file.
- * Creates the necessary directories if they don't exist.
- * Safely handles the serialization process to prevent data loss.
- */
 void Room::saveMessages() {
-    // Skip if roomId is empty to prevent errors
-    if (roomId.isEmpty()) {
-        return;
-    }
-    
-    // Skip if there are no messages to save
-    if (messages.isEmpty()) {
-        return;
-    }
-    
-    // Make a safe copy of the messages to prevent concurrent modification issues
-    QVector<Message> messagesToSave = safelyCopyMessages();
-    
     QString roomFile = "../db/rooms/" + roomId + ".txt";
+    qDebug() << "Saving all messages to file:" << roomFile;
     
     // Create the rooms directory if it doesn't exist
     QDir dir("../db/rooms");
     if (!dir.exists()) {
-        bool created = dir.mkpath(".");
-        if (!created) {
-            return;
-        }
+        dir.mkpath(".");
     }
     
     QFile file(roomFile);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
         
-        for (const Message& msg : messagesToSave) {
+        // Just iterate through the list directly (already in chronological order)
+        for (const Message& msg : messages) {
             out << msg.toString() << "\n";
         }
         
         file.close();
+        qDebug() << "Saved" << messages.size() << "messages to file";
     } else {
+        qDebug() << "Failed to open file for writing:" << file.errorString();
     }
 }
 
-/*
- * Contributor: Qobesy
- * Function: safelyCopyMessages
- * Description: Creates a safe copy of the messages vector to prevent concurrent modification issues.
- * Returns a new vector containing copies of all messages in the room.
- */
-QVector<Message> Room::safelyCopyMessages() const {
-    QVector<Message> copy;
-    
-    // Check if original vector is valid before copying
-    if (!messages.isEmpty()) {
-        // Create a fresh vector of the right size
-        copy.reserve(messages.size());
-        
-        // Copy each message individually 
-        for (int i = 0; i < messages.size(); ++i) {
-            copy.append(messages.at(i));
-        }
-    }
-    
-    return copy;
-}
-
-/*
- * Contributor: Qobesy
- * Function: Room destructor
- * Description: Cleans up resources and saves messages before the room is destroyed.
- * Includes safe exception handling to prevent crashes during application shutdown.
- */
 Room::~Room() {
-    try {
-        // Only proceed if we have messages and the directory exists
-        QDir roomsDir("../db/rooms");
-        if (roomsDir.exists() && !messages.isEmpty()) {
-            // Make a safe copy of messages before clearing the original vector
-            QVector<Message> messagesToSave = safelyCopyMessages();
-            
-            // Clear original vector first to prevent any issues during destruction
-            clearMessages();
-            
-            // Save the copied messages
-            if (!messagesToSave.isEmpty() && !roomId.isEmpty()) {
-                QString roomFile = "../db/rooms/" + roomId + ".txt";
-                QFile file(roomFile);
-                if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                    QTextStream out(&file);
-                    for (const Message& msg : messagesToSave) {
-                        out << msg.toString() << "\n";
-                    }
-                    file.close();
-                }
-            }
-        } else {
-            // Just clear messages to be safe
-            clearMessages();
-        }
-    } catch (const std::exception& e) {
-        // Just clear messages to be safe in case of exception
-        clearMessages();
-    }
+    // Save messages before destruction
+    saveMessages();
+    qDebug() << "Room" << roomId << "destroyed and messages saved";
 }

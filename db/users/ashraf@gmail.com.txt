@@ -1,7 +1,5 @@
-<<<<<<< HEAD
-=======
-CONTACT:bassam@gmail.com
-ROOM:ashraf@gmail.com_bassam@gmail.com|ashraf@gmail.com_bassam@gmail.com
->>>>>>> bfd0fc2 (handle the settings)
-ROOM:ashraf@gmail.com_hoss@gmail.com|ashraf@gmail.com_hoss@gmail.com
-ROOM:ashraf@gmail.com_loki@gmail.com|ashraf@gmail.com_loki@gmail.com
+CONTACT:hossam@gmail.com
+CONTACT:yousef@gmail.com
+ROOM:ashraf@gmail.com_hossam@gmail.com|ashraf@gmail.com_hossam@gmail.com
+ROOM:ashraf@gmail.com_yousef@gmail.com|ashraf@gmail.com_yousef@gmail.com
+NICKNAME:Loki

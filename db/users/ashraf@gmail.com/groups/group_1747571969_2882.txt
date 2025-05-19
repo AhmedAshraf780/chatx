@@ -1,0 +1,4 @@
+GroupID: group_1747571969_2882
+Name: Discussion
+AdminID: ashraf@gmail.com
+Members: hossam@gmail.com,malak@gmail.com,yousef@gmail.com,ashraf@gmail.com
