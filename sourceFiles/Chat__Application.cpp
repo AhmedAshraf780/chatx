@@ -6,6 +6,8 @@
 #include "../server/server.h"
 #include <QStyleFactory>
 
+// Contributed by Ahmed Alaadin @alaadin18
+
 Chat__Application::Chat__Application(QWidget *parent) : QMainWindow(parent) {
   ui.setupUi(this);
   login *log = new login(this); 
